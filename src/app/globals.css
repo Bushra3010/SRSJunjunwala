@@ -1,26 +1,122 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-nunito);
   --font-mono: var(--font-geist-mono);
+
+  /* Logo palette: Shree Rani Sati forest green + wheat gold on light neutral surfaces. */
+  --color-ink: #1b2a1f;
+  --color-muted: #6b7280;
+  --color-line: #e9edf4;
+  --color-canvas: #f8f9fa;
+  --color-sidebar: #ffffff;
+  --color-accent: #1f6b32;
+  --color-accent-soft: #eef6ef;
+  --color-navy: #14532d;
+  --color-success: #03c95a;
+  --color-danger: #e70d0d;
+  --color-warning: #ffc107;
+  --color-info: #3e6fc0;
+  --color-gold: #d8a242;
+  --color-gold-soft: #fbf3e2;
+  --color-gold-ink: #7a5408;
+
+  /* Chart series (validated: all checks pass on white). */
+  --color-s1: #2f7d4a;
+  --color-s2: #c08a24;
+  --color-s3: #3e6fc0;
+
+  /* Names kept from earlier pages, mapped into this palette. */
+  --color-onyx: #1b2a1f;
+  --color-lemon: #d8a242;
+  --color-lemon-soft: #eef6ef;
+  --color-tangerine: #d8a242;
+  --color-tangerine-soft: #dcebdf;
+  --color-brand-50: #eef6ef;
+  --color-brand-100: #dcebdf;
+  --color-brand-600: #1f6b32;
+  --color-brand-700: #14532d;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: #f8f9fa;
+  color: #1b2a1f;
+}
+
+/* ---- Surfaces ------------------------------------------------------------ */
+@utility card {
+  @apply min-w-0 rounded-[10px] border border-line bg-white shadow-[0_1px_1px_rgba(16,24,40,0.03)];
+}
+@utility tile {
+  @apply min-w-0 rounded-[10px] border border-line bg-white p-5 shadow-[0_1px_1px_rgba(16,24,40,0.03)];
+}
+
+/* ---- Controls ------------------------------------------------------------ */
+@utility input {
+  @apply w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-ink outline-none placeholder:text-gray-400 focus:border-accent focus:ring-2 focus:ring-accent/15 disabled:bg-gray-50 disabled:text-gray-500;
+}
+@utility label {
+  @apply mb-1.5 block text-[13px] font-semibold text-ink;
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3.5 py-2 text-[13px] font-semibold whitespace-nowrap transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-gold text-[#2a1d05] shadow-[0_4px_12px_-6px_rgba(184,134,43,0.7)] hover:bg-[#c8922e];
+}
+@utility btn-accent {
+  @apply btn bg-accent text-white hover:bg-[#14532d];
+}
+@utility btn-dark {
+  @apply btn bg-navy text-white hover:bg-[#0b3d14];
+}
+@utility btn-secondary {
+  @apply btn border border-line bg-white text-ink hover:border-gray-300 hover:bg-gray-50;
+}
+@utility btn-danger {
+  @apply btn border border-red-200 bg-white text-danger hover:bg-red-50;
+}
+@utility num {
+  @apply text-right tabular-nums;
+}
+
+/* ---- Tables -------------------------------------------------------------- */
+.table {
+  @apply w-full text-left text-[13px];
+}
+.table th {
+  @apply border-b border-line bg-[#f8f9fa] px-4 py-3 text-[13px] font-semibold whitespace-nowrap text-ink;
+}
+.table td {
+  @apply border-t border-line px-4 py-3 align-middle text-gray-600;
+}
+.table tbody tr:first-child td {
+  border-top: 0;
+}
+.table td:first-child,
+.table td.font-mono {
+  white-space: nowrap;
+}
+.table .input {
+  min-width: 5.5rem;
+}
+
+/* ---- Textures (kept for any legacy marks) --------------------------------- */
+.pat-dots {
+  background-image: radial-gradient(rgba(32, 44, 75, 0.7) 1.1px, transparent 1.4px);
+  background-size: 6px 6px;
+}
+.pat-stripes {
+  background-image: repeating-linear-gradient(135deg, rgba(32, 44, 75, 0.75) 0 2px, transparent 2px 6px);
+}
+.pat-fade {
+  background: linear-gradient(180deg, #2f7d4a 0%, #14532d 100%);
+}
+.pat-solid {
+  background: #1b2a1f;
+}
+.pat-light {
+  background-image: radial-gradient(rgba(32, 44, 75, 0.4) 1px, transparent 1.3px);
+  background-size: 5px 5px;
 }

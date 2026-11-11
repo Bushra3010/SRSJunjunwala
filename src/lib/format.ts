@@ -1,0 +1,49 @@
+const TZ = "Asia/Kolkata";
+
+export function kg(value: number | string | null | undefined, digits = 0) {
+  if (value === null || value === undefined || value === "") return "—";
+  const n = Number(value);
+  return `${n.toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: 2 })} kg`;
+}
+
+export function num(value: number | string | null | undefined) {
+  if (value === null || value === undefined || value === "") return "—";
+  return Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+}
+
+export function dateTime(value: string | null | undefined) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("en-IN", {
+    timeZone: TZ,
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export function date(value: string | null | undefined) {
+  if (!value) return "—";
+  const d = value.length === 10 ? new Date(value + "T00:00:00+05:30") : new Date(value);
+  return d.toLocaleDateString("en-IN", { timeZone: TZ, day: "2-digit", month: "short", year: "numeric" });
+}
+
+/** Start of today in IST, as an ISO string, for "today" filters. */
+export function todayIST() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date()); // YYYY-MM-DD
+}
+
+export function startOfTodayIST() {
+  return new Date(`${todayIST()}T00:00:00+05:30`).toISOString();
+}
+
+export function minutesSince(value: string) {
+  return Math.floor((Date.now() - new Date(value).getTime()) / 60000);
+}
+
+/** Readable message from a Supabase/Postgres error. */
+export function errorMessage(err: { message?: string } | null | undefined) {
+  const msg = err?.message ?? "Something went wrong";
+  return msg.replace(/^PERMISSION_DENIED: /, "Not allowed: ").replace(/^OVER_ALLOCATION: /, "Over-allocation: ").replace(/^INSUFFICIENT_STOCK: /, "Not enough stock: ");
+}

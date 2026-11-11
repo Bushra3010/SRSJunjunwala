@@ -1,0 +1,5 @@
+.env*
+!.env.example
+.demo-data
+.next
+node_modules
