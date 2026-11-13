@@ -12,3 +12,7 @@ insert into public.calc_settings (key, value, description) values
   ('dispatch_weight_tolerance_pct', 1, 'Allowed % difference between weighbridge net and loaded bags before a warning (PRD QCO-07)'),
   ('truck_wait_alert_minutes', 30, 'Trucks waiting longer than this appear in Needs attention')
 on conflict (key) do nothing;
+
+-- Factory equipment from the process diagram: pre-cleaner, 6 soaking tanks (pairs 1+2, 3+4, 5+6),
+-- common steaming tank, 3 dryers, mill feed tanks and the milling line.
+select public.seed_production_equipment(id) from public.plants;

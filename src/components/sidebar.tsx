@@ -61,7 +61,20 @@ const SECTIONS: { title: string; items: Item[] }[] = [
     title: "Plant",
     items: [
       { key: "inventory", href: "/inventory", label: "Inventory", icon: Boxes },
-      { key: "processing", href: "/processing", label: "Processing", icon: Cog },
+      {
+        key: "processing",
+        href: "/production",
+        label: "Production",
+        icon: Cog,
+        children: [
+          { key: "processing", href: "/production", label: "Floor overview" },
+          { key: "processing", href: "/production/soaking", label: "Soaking tanks" },
+          { key: "processing", href: "/production/drying", label: "Dryers" },
+          { key: "processing", href: "/production/milling", label: "Milling" },
+          { key: "processing", href: "/production/trace", label: "Traceability" },
+          { key: "processing", href: "/production/reports", label: "Reports" },
+        ],
+      },
       { key: "stores", href: "/stores", label: "Stores & Repairs", icon: Wrench },
       { key: "reports", href: "/reports", label: "Reports", icon: BarChart3 },
     ],
@@ -76,6 +89,7 @@ const SHORTCUTS: { key: NavKey; href: string; label: string; dot: string }[] = [
   { key: "weighbridge", href: "/weighbridge?tab=exceptions", label: "Ticket exceptions", dot: "#d10b0b" },
   { key: "qc", href: "/qc", label: "QC work queue", dot: "#0a8f44" },
   { key: "weighbridge", href: "/weighbridge?tab=cycles", label: "RST cycles", dot: "#d8a242" },
+  { key: "processing", href: "/production/trace", label: "Trace a batch", dot: "#3e6fc0" },
 ];
 
 export function AppShell({

@@ -27,6 +27,10 @@ export async function middleware(request: NextRequest) {
   const user = data?.claims ?? null;
 
   const isLogin = request.nextUrl.pathname.startsWith("/login");
+  // API callers get a JSON 401 instead of a redirect to the sign-in page.
+  if (!user && request.nextUrl.pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  }
   if (!user && !isLogin) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";

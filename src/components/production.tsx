@@ -1,0 +1,404 @@
+import Link from "next/link";
+import { randomUUID } from "node:crypto";
+import clsx from "clsx";
+import { Badge, StatusBadge } from "@/components/ui";
+import { dateTime } from "@/lib/format";
+import { STAGE_META, hours, q, type Batch, type Equipment, type Stage } from "@/lib/production";
+import { cancelBatch, completeBatch, startBatch } from "@/app/(app)/production/actions";
+
+export const PROD_TABS = [
+  { key: "overview", label: "Overview", href: "/production" },
+  { key: "receipts", label: "Receipts", href: "/production/receipts" },
+  { key: "precleaning", label: "Pre-cleaning", href: "/production/precleaning" },
+  { key: "soaking", label: "Soaking tanks", href: "/production/soaking" },
+  { key: "steaming", label: "Steaming", href: "/production/steaming" },
+  { key: "drying", label: "Dryers", href: "/production/drying" },
+  { key: "mill-feed", label: "Mill feed", href: "/production/mill-feed" },
+  { key: "milling", label: "Milling", href: "/production/milling" },
+  { key: "outputs", label: "Outputs", href: "/production/outputs" },
+  { key: "trace", label: "Traceability", href: "/production/trace" },
+  { key: "timeline", label: "Timeline", href: "/production/timeline" },
+  { key: "faults", label: "Faults", href: "/production/faults" },
+  { key: "reports", label: "Reports", href: "/production/reports" },
+];
+
+/** Horizontal, scrollable sub-navigation for the production module. */
+export function ProductionNav({ active }: { active: string }) {
+  return (
+    <nav aria-label="Production" className="-mx-4 mb-5 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+      <div className="flex w-max gap-1.5">
+        {PROD_TABS.map((t) => (
+          <Link
+            key={t.key}
+            href={t.href}
+            aria-current={t.key === active ? "page" : undefined}
+            className={clsx(
+              "rounded-md border px-3 py-1.5 text-[13px] font-semibold whitespace-nowrap",
+              t.key === active ? "border-[#1f6b32] bg-[#1f6b32] text-white" : "border-line bg-white text-ink hover:border-[#c08a24] hover:text-[#7b5e2a]",
+            )}
+          >
+            {t.label}
+          </Link>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+export function BatchLink({ no, className }: { no: string; className?: string }) {
+  return (
+    <Link href={`/production/batches/${no}`} className={clsx("font-mono text-[13px] font-bold text-[#1f6b32] hover:underline", className)}>
+      {no}
+    </Link>
+  );
+}
+
+export function StageChip({ stage }: { stage: Stage }) {
+  const m = STAGE_META[stage];
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[12px] font-bold text-ink">
+      <span className="size-2 rounded-full" style={{ background: m.color }} aria-hidden />
+      {m.label}
+    </span>
+  );
+}
+
+/** Quantity in quintals with kg underneath and its trust level. */
+export function Qty({ kg, status }: { kg: number | null | undefined; status?: string | null }) {
+  if (kg === null || kg === undefined) return <span className="text-muted">—</span>;
+  return (
+    <span className="inline-flex flex-col">
+      <span className="font-bold whitespace-nowrap text-ink tabular-nums">{q(kg)}</span>
+      <span className="text-[11px] whitespace-nowrap text-muted tabular-nums">
+        {Number(kg).toLocaleString("en-IN")} kg{status === "estimated" ? " · estimate" : ""}
+      </span>
+    </span>
+  );
+}
+
+export function elapsedMinutes(b: Pick<Batch, "started_at" | "ended_at">) {
+  if (!b.started_at) return null;
+  const end = b.ended_at ? new Date(b.ended_at).getTime() : Date.now();
+  return Math.max(0, Math.round((end - new Date(b.started_at).getTime()) / 60000));
+}
+
+/** Equipment status tile for the floor boards. */
+export function EquipmentTile({
+  eq,
+  batch,
+  available,
+  sub,
+}: {
+  eq: Equipment;
+  batch?: Batch | null;
+  available?: number;
+  sub?: React.ReactNode;
+}) {
+  const running = batch?.status === "running";
+  const holding = batch && batch.status === "completed" && (available ?? 0) > 0;
+  const mins = batch ? elapsedMinutes({ started_at: batch.started_at, ended_at: running ? null : batch.ended_at }) : null;
+  const overdue = running && eq.expected_hours_max && mins !== null && mins > eq.expected_hours_max * 60;
+  const pct = running && eq.expected_hours_max && mins !== null ? Math.min(100, (mins / (eq.expected_hours_max * 60)) * 100) : null;
+  const state = running ? (overdue ? "Overdue" : "Running") : holding ? "Done · waiting" : "Free";
+  const color = running ? (overdue ? "#d10b0b" : "#3e6fc0") : holding ? "#c08a24" : "#0a8f44";
+  return (
+    <div className="card flex min-w-0 flex-col gap-2 p-4" style={{ borderTop: `3px solid ${color}` }}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-[14px] font-bold text-ink">{eq.name}</div>
+          {sub && <div className="text-[11px] text-muted">{sub}</div>}
+        </div>
+        <span className="rounded px-1.5 py-0.5 text-[10px] font-bold whitespace-nowrap text-white" style={{ background: color }}>
+          {state}
+        </span>
+      </div>
+      {batch && (running || holding) ? (
+        <div className="space-y-1.5 text-[12px]">
+          <BatchLink no={batch.batch_no} />
+          <div className="flex justify-between gap-2 text-muted">
+            <span>{running ? "In" : "Out"}</span>
+            <span className="font-bold text-ink tabular-nums">{q(running ? batch.input_kg : available)}</span>
+          </div>
+          <div className="flex justify-between gap-2 text-muted">
+            <span>{running ? "Elapsed" : "Finished"}</span>
+            <span className="font-bold text-ink">{running ? hours(mins) : dateTime(batch.ended_at)}</span>
+          </div>
+          {pct !== null && (
+            <div className="h-1.5 overflow-hidden rounded-full bg-[#e9edf4]" title={`Expected ${eq.expected_hours_min}–${eq.expected_hours_max} h`}>
+              <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: color }} />
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="text-[12px] text-muted">Empty — ready to load</div>
+      )}
+    </div>
+  );
+}
+
+export type Candidate = { batch: Batch; available: number; label?: React.ReactNode };
+
+/**
+ * Start a batch from one or more completed parent batches. Quantities are in quintals.
+ * Steaming and drying always take the whole parent, so they hide the quantity boxes.
+ */
+export function StartForm({
+  stage,
+  equipment,
+  candidates,
+  back,
+  canAuthorize,
+  wholeBatch = false,
+  title,
+  submitLabel = "Start batch",
+  defaultEquipment,
+}: {
+  stage: Stage;
+  equipment: Equipment[];
+  candidates: Candidate[];
+  back: string;
+  canAuthorize: boolean;
+  wholeBatch?: boolean;
+  title?: string;
+  submitLabel?: string;
+  defaultEquipment?: string;
+}) {
+  return (
+    <form action={startBatch} className="space-y-4 p-4">
+      <input type="hidden" name="stage" value={stage} />
+      <input type="hidden" name="back" value={back} />
+      <input type="hidden" name="request_id" value={randomUUID()} />
+      {title && <p className="text-[13px] text-muted">{title}</p>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor={`eq-${stage}`}>
+            {STAGE_META[stage].label === "Mill feed" ? "Destination tank" : "Equipment"}
+          </label>
+          <select id={`eq-${stage}`} name="equipment_id" className="input" required={stage !== "precleaning"} defaultValue={defaultEquipment ?? ""}>
+            <option value="">{stage === "precleaning" ? "Not recorded" : "Select…"}</option>
+            {equipment.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label" htmlFor={`st-${stage}`}>Start time (blank = now)</label>
+          <input id={`st-${stage}`} type="datetime-local" name="started_at" className="input" />
+        </div>
+      </div>
+      <fieldset>
+        <legend className="label">Input batches {wholeBatch ? "(whole batch is transferred)" : "(quantity in quintals)"}</legend>
+        {candidates.length === 0 ? (
+          <p className="rounded-md border border-dashed border-line px-3 py-4 text-center text-[13px] text-muted">
+            Nothing is ready from {STAGE_META[STAGE_META[stage].parent!].label.toLowerCase()} yet.
+          </p>
+        ) : (
+          <ul className="divide-y divide-line rounded-md border border-line">
+            {candidates.map(({ batch: b, available, label }) => (
+              <li key={b.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                <label className="flex min-w-0 flex-1 items-center gap-2.5">
+                  <input type="checkbox" name="pick" value={b.id} className="size-4 accent-[#1f6b32]" defaultChecked={candidates.length === 1} />
+                  <span className="min-w-0">
+                    <span className="block font-mono text-[13px] font-bold text-ink">{b.batch_no}</span>
+                    <span className="block text-[11px] text-muted">
+                      {label ?? null} {q(available)} available{b.output_qty_status === "estimated" ? " (estimate)" : ""}
+                    </span>
+                  </span>
+                </label>
+                {!wholeBatch && (
+                  <span className="flex items-center gap-1">
+                    <input
+                      name={`qty_${b.id}`}
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      defaultValue={(available / 100).toFixed(2)}
+                      className="input w-28 text-right"
+                      aria-label={`Quantity from ${b.batch_no} in quintals`}
+                    />
+                    <span className="text-xs text-muted">q</span>
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </fieldset>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor={`rm-${stage}`}>Remarks</label>
+          <input id={`rm-${stage}`} name="remarks" className="input" placeholder="Optional" />
+        </div>
+        {canAuthorize && (
+          <div>
+            <label className="label" htmlFor={`au-${stage}`}>Manager authorisation (only if over quantity / combining lots)</label>
+            <input id={`au-${stage}`} name="authorization" className="input" placeholder="Reason, recorded in history" />
+          </div>
+        )}
+      </div>
+      <button className="btn-primary" disabled={candidates.length === 0}>
+        {submitLabel}
+      </button>
+    </form>
+  );
+}
+
+/** Inline "complete" form for a running batch. */
+export function CompleteForm({ batch, back, needsOutput, moisture = false }: { batch: Batch; back: string; needsOutput: boolean; moisture?: boolean }) {
+  return (
+    <details className="group">
+      <summary className="btn-primary cursor-pointer list-none py-1">Complete…</summary>
+      <form action={completeBatch} className="mt-3 grid gap-3 rounded-md border border-line bg-[#fbf8ef] p-3 sm:grid-cols-2">
+        <input type="hidden" name="id" value={batch.id} />
+        <input type="hidden" name="batch_no" value={batch.batch_no} />
+        <input type="hidden" name="back" value={back} />
+        <div>
+          <label className="label">Output (q){needsOutput ? "" : " — blank = estimate"}</label>
+          <input name="output_q" type="number" step="0.01" min="0.01" className="input" required={needsOutput} placeholder={needsOutput ? "" : (Number(batch.input_kg) / 100).toFixed(2)} />
+        </div>
+        <div>
+          <label className="label">Rejected (q)</label>
+          <input name="rejected_q" type="number" step="0.01" min="0" className="input" defaultValue="0" />
+        </div>
+        {moisture && (
+          <div>
+            <label className="label">Moisture %</label>
+            <input name="moisture_pct" type="number" step="0.1" min="0" max="60" className="input" />
+          </div>
+        )}
+        <div>
+          <label className="label">End time (blank = now)</label>
+          <input name="ended_at" type="datetime-local" className="input" />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="label">Remarks</label>
+          <input name="remarks" className="input" />
+        </div>
+        <button className="btn-primary sm:col-span-2">Complete {batch.batch_no}</button>
+      </form>
+    </details>
+  );
+}
+
+export function CancelForm({ batch, back }: { batch: Pick<Batch, "id" | "batch_no">; back: string }) {
+  return (
+    <details>
+      <summary className="btn-danger cursor-pointer list-none py-1">Cancel…</summary>
+      <form action={cancelBatch} className="mt-3 flex flex-wrap items-end gap-2 rounded-md border border-red-200 bg-red-50 p-3">
+        <input type="hidden" name="id" value={batch.id} />
+        <input type="hidden" name="batch_no" value={batch.batch_no} />
+        <input type="hidden" name="back" value={back} />
+        <div className="min-w-48 flex-1">
+          <label className="label">Reason (kept on record)</label>
+          <input name="reason" className="input" required />
+        </div>
+        <button className="btn-danger">Cancel batch</button>
+      </form>
+    </details>
+  );
+}
+
+/** History table used by every stage page. */
+export function BatchTable({
+  batches,
+  equipmentById,
+  userName,
+  extra,
+  showStage = false,
+}: {
+  batches: Batch[];
+  equipmentById: Map<string, Equipment>;
+  userName: (id: string | null) => string;
+  extra?: { head: string; cell: (b: Batch) => React.ReactNode };
+  showStage?: boolean;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Batch</th>
+            {showStage && <th>Stage</th>}
+            <th>Equipment</th>
+            <th>Status</th>
+            <th className="text-right">Input</th>
+            <th className="text-right">Output</th>
+            <th className="text-right">Loss</th>
+            <th>Started</th>
+            <th>Ended</th>
+            <th>Duration</th>
+            <th>Operator</th>
+            {extra && <th>{extra.head}</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {batches.map((b) => (
+            <tr key={b.id} className={b.status === "cancelled" ? "opacity-60" : undefined}>
+              <td>
+                <BatchLink no={b.batch_no} />
+              </td>
+              {showStage && (
+                <td>
+                  <StageChip stage={b.stage} />
+                </td>
+              )}
+              <td className="whitespace-nowrap">{b.equipment_id ? equipmentById.get(b.equipment_id)?.name : "—"}</td>
+              <td>
+                <StatusBadge status={b.status} />
+              </td>
+              <td className="text-right">
+                <Qty kg={b.input_kg} />
+              </td>
+              <td className="text-right">
+                <Qty kg={b.output_kg} status={b.output_qty_status} />
+              </td>
+              <td className="text-right whitespace-nowrap tabular-nums">{b.loss_kg === null ? "—" : q(b.loss_kg)}</td>
+              <td className="text-xs whitespace-nowrap">{dateTime(b.started_at)}</td>
+              <td className="text-xs whitespace-nowrap">{dateTime(b.ended_at)}</td>
+              <td className="text-xs whitespace-nowrap">{hours(b.duration_minutes ?? (b.status === "running" ? elapsedMinutes(b) : null))}</td>
+              <td className="text-xs whitespace-nowrap">{userName(b.operator_id)}</td>
+              {extra && <td>{extra.cell(b)}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Search + status + date filters (GET form) shared by stage pages. */
+export function BatchFilters({ action, sp }: { action: string; sp: { q?: string; status?: string; from?: string; to?: string } }) {
+  return (
+    <form action={action} className="flex flex-wrap items-end gap-2 border-b border-line px-5 py-3">
+      <div className="min-w-40 flex-1">
+        <label className="label" htmlFor="f-q">Batch ID</label>
+        <input id="f-q" name="q" defaultValue={sp.q} placeholder="e.g. SOAK-2026-00012" className="input" />
+      </div>
+      <div>
+        <label className="label" htmlFor="f-s">Status</label>
+        <select id="f-s" name="status" defaultValue={sp.status ?? ""} className="input w-auto">
+          <option value="">All</option>
+          <option value="running">Running</option>
+          <option value="completed">Ready for next stage</option>
+          <option value="consumed">Moved on</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div>
+        <label className="label" htmlFor="f-from">From</label>
+        <input id="f-from" type="date" name="from" defaultValue={sp.from} className="input w-auto" />
+      </div>
+      <div>
+        <label className="label" htmlFor="f-to">To</label>
+        <input id="f-to" type="date" name="to" defaultValue={sp.to} className="input w-auto" />
+      </div>
+      <button className="btn-secondary">Filter</button>
+    </form>
+  );
+}
+
+export function QtyStatusBadge({ status }: { status: string | null }) {
+  return status ? <StatusBadge status={status} /> : <Badge>—</Badge>;
+}

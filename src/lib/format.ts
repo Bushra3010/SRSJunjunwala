@@ -45,5 +45,20 @@ export function minutesSince(value: string) {
 /** Readable message from a Supabase/Postgres error. */
 export function errorMessage(err: { message?: string } | null | undefined) {
   const msg = err?.message ?? "Something went wrong";
-  return msg.replace(/^PERMISSION_DENIED: /, "Not allowed: ").replace(/^OVER_ALLOCATION: /, "Over-allocation: ").replace(/^INSUFFICIENT_STOCK: /, "Not enough stock: ");
+  const labels: Record<string, string> = {
+    PERMISSION_DENIED: "Not allowed",
+    OVER_ALLOCATION: "Over-allocation",
+    INSUFFICIENT_STOCK: "Not enough stock",
+    DUPLICATE_CONSUMPTION: "Already used",
+    INCOMPLETE_BATCH: "Not finished yet",
+    EQUIPMENT_BUSY: "Equipment in use",
+    STEAMER_BUSY: "Steamer in use",
+    WRONG_PAIR: "Wrong tank pair",
+    WRONG_DRYER: "Wrong dryer",
+    WRONG_EQUIPMENT: "Wrong equipment",
+    WRONG_SOURCE: "Wrong source batch",
+    MULTI_INPUT: "Authorisation needed",
+    MIXED_VARIETY: "Mixed variety",
+  };
+  return msg.replace(/^([A-Z_]{4,}): /, (m, code: string) => (labels[code] ? `${labels[code]}: ` : m));
 }

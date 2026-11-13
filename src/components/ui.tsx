@@ -43,6 +43,20 @@ const STATUS: Record<string, { label: string; tone: Tone }> = {
   partial: { label: "Partially fulfilled", tone: "orange" },
   fulfilled: { label: "Fulfilled", tone: "green" },
   not_started: { label: "Not started", tone: "navy" },
+  // production batches
+  running: { label: "Running", tone: "blue" },
+  completed: { label: "Ready for next stage", tone: "amber" },
+  consumed: { label: "Moved on", tone: "green" },
+  // quantity trust levels
+  estimated: { label: "Estimated", tone: "amber" },
+  entered: { label: "Operator entered", tone: "blue" },
+  approved: { label: "Approved", tone: "navy" },
+  confirmed: { label: "Physically confirmed", tone: "green" },
+  // quality
+  pending: { label: "Quality pending", tone: "slate" },
+  passed: { label: "Quality passed", tone: "green" },
+  hold: { label: "On hold", tone: "amber" },
+  rejected: { label: "Rejected", tone: "red" },
 };
 
 export function StatusBadge({ status }: { status: string }) {

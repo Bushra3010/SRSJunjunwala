@@ -8,6 +8,11 @@ export const ROLES = [
   "foreman",
   "store_custodian",
   "commercial",
+  "production_manager",
+  "soaking_operator",
+  "steaming_operator",
+  "drying_operator",
+  "milling_operator",
 ] as const;
 
 export type Role = (typeof ROLES)[number];
@@ -22,6 +27,11 @@ export const ROLE_LABELS: Record<Role, string> = {
   foreman: "Boiler operator / Foreman",
   store_custodian: "Store room custodian",
   commercial: "Commercial / Orders",
+  production_manager: "Production manager",
+  soaking_operator: "Soaking / pre-cleaning operator",
+  steaming_operator: "Steaming operator",
+  drying_operator: "Drying operator",
+  milling_operator: "Milling operator",
 };
 
 export type NavKey =
@@ -43,7 +53,7 @@ export const NAV_ACCESS: Record<NavKey, Role[]> = {
   qc: ["admin", "management", "qc_unloading", "qc_loading", "qc_head"],
   "purchase-orders": ["admin", "management", "commercial", "qc_head"],
   "sales-orders": ["admin", "management", "commercial", "qc_head"],
-  processing: ["admin", "management", "foreman", "qc_head", "commercial"],
+  processing: ["admin", "management", "production_manager", "soaking_operator", "steaming_operator", "drying_operator", "milling_operator", "foreman", "qc_head"],
   inventory: ["admin", "management", "qc_head"],
   stores: ["admin", "management", "store_custodian"],
   reports: ["admin", "management", "qc_head", "commercial"],
@@ -58,3 +68,18 @@ export const QC_REVIEWERS: Role[] = ["admin", "qc_head"];
 export const ORDER_EDITORS: Role[] = ["admin", "management", "commercial"];
 export const TICKET_CAPTURERS: Role[] = ["admin", "management", "weighbridge_operator"];
 export const TICKET_RESOLVERS: Role[] = ["admin", "management", "qc_head"];
+
+/** Who may operate each production stage. Mirrors require_stage_role() in the database. */
+export const STAGE_OPERATORS: Record<string, Role[]> = {
+  receipt: ["admin", "production_manager", "qc_head"],
+  precleaning: ["admin", "production_manager", "soaking_operator", "foreman"],
+  soaking: ["admin", "production_manager", "soaking_operator", "foreman"],
+  steaming: ["admin", "production_manager", "steaming_operator", "foreman"],
+  drying: ["admin", "production_manager", "drying_operator", "foreman"],
+  mill_feed: ["admin", "production_manager", "drying_operator", "milling_operator", "foreman"],
+  milling: ["admin", "production_manager", "milling_operator"],
+  output: ["admin", "production_manager", "milling_operator"],
+};
+export const PRODUCTION_APPROVERS: Role[] = ["admin", "production_manager"];
+export const PRODUCTION_QUALITY: Role[] = ["admin", "production_manager", "qc_head"];
+export const FAULT_REPORTERS: Role[] = ["admin", "production_manager", "soaking_operator", "steaming_operator", "drying_operator", "milling_operator", "foreman"];

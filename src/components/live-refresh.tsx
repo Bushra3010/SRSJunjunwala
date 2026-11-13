@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 
-/** Tables published to Supabase Realtime (see migration 20261112000006). */
-const TABLES = ["weighbridge_tickets", "qc_inbound", "qc_outbound", "purchase_orders", "sales_orders", "stock_movements"];
+/** Tables published to Supabase Realtime (see migrations 20261112000006 and 20261114000009). */
+const TABLES = ["weighbridge_tickets", "qc_inbound", "qc_outbound", "purchase_orders", "sales_orders", "stock_movements", "production_batches", "batch_events", "production_faults", "milling_stage_events"];
 
 /**
  * Subscribes to database changes the signed-in user is allowed to see (RLS applies)
