@@ -54,6 +54,8 @@ export function errorMessage(err: { message?: string } | null | undefined) {
     EQUIPMENT_BUSY: "Equipment in use",
     STEAMER_BUSY: "Steamer in use",
     DRYER_BUSY: "Dryer still full",
+    NO_STANDARD_WEIGHT: "Standard weight missing",
+    NOTHING_UNLOADED: "Nothing unloaded",
     WRONG_PAIR: "Wrong tank pair",
     WRONG_DRYER: "Wrong dryer",
     WRONG_EQUIPMENT: "Wrong equipment",

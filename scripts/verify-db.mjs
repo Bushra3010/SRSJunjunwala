@@ -268,7 +268,7 @@ async function main() {
   const eq = (await db.query("select id, code from public.production_equipment")).rows.reduce((a, r) => ({ ...a, [r.code]: r.id }), {});
   const grade = (await db.query("select id, code from public.rice_grades")).rows.reduce((a, r) => ({ ...a, [r.code]: r.id }), {});
   check("equipment seeded: 6 tanks, steamer, 3 dryers, mill line", ["TANK-1", "TANK-6", "STEAMER", "DRYER-3", "MILL-1"].every((c) => eq[c]));
-  check("7 reference grades seeded", Object.keys(grade).length === 7);
+  check("7 reference grades seeded", ["WAND1", "WAND2", "TIBAAR", "DUBAAR", "BROKEN", "REJECTION", "RESORT"].every((c) => grade[c]));
   const start = (who, stage, equip, inputs, extra = {}) =>
     as(users[who], (tx) => one(tx, "select public.start_production_batch($1, $2, $3::jsonb, $4, $5, $6, $7) as id",
       [stage, equip ?? null, JSON.stringify(inputs), extra.at ?? null, extra.request ?? null, null, extra.auth ?? null])).then((r) => r.id);
@@ -532,6 +532,101 @@ async function main() {
   const line5 = await newTruck(304, "HR 55 AA 3040");
   const std = await as(users.soaking_operator, (tx) => one(tx, "select std_tank_kg from public.production_receivable_lines() where qc_line_id = $1", [line5]));
   check("standard weight per tank comes with the waiting truck", Number(std.std_tank_kg) === 16500);
+
+
+  // One-click soaking from the unloaded total (client, 14 Nov, third round).
+  console.log("\nSoaking from the unloaded total (standard weight per tank)");
+  const waitingKg = async (code) => {
+    const rows = await as(users.soaking_operator, (tx) => all(tx, "select s.waiting_kg from public.unloaded_paddy_summary() s join public.varieties v on v.id = s.variety_id where v.code = $1", [code]));
+    return Number(rows[0]?.waiting_kg ?? 0);
+  };
+  const w0 = await waitingKg("IR64");
+  const soakStd = (tank, code, at) => as(users.soaking_operator, async (tx) => {
+    const vId = (await one(tx, "select id from public.varieties where code = $1", [code])).id;
+    return (await one(tx, "select public.start_soaking_standard($1, $2, $3) as id", [eq[tank], vId, at])).id;
+  });
+  const tPart = await soakStd("TANK-6", "IR64", "2026-10-15 09:00+05:30");
+  const PART = await batch(tPart);
+  check("unloaded total shown per variety", w0 >= 16000, w0);
+  check("start soaking takes what is waiting when less than a full tank (part tank noted)", Number(PART.input_kg) === w0 && /Part tank/.test(PART.remarks ?? ""), `${PART.input_kg} ${PART.remarks}`);
+  check("unloaded total goes down to zero", (await waitingKg("IR64")) === 0);
+  const lineA = await newTruck(305, "HR 55 AA 3050");
+  const lineB = await newTruck(306, "HR 55 AA 3060");
+  check("two more trucks add to the total", (await waitingKg("IR64")) === 32000);
+  const tFull = await soakStd("TANK-1", "IR64", "2026-10-15 10:00+05:30");
+  const FULL = await batch(tFull);
+  const fromTrucks = await all(db, "select p.source_qc_line_id, i.qty_kg from public.batch_inputs i join public.production_batches p on p.id = i.parent_id where i.child_id = $1 order by i.qty_kg desc", [tFull]);
+  check("one click fills a tank with the standard 165 q, oldest truck first", Number(FULL.input_kg) === 16500 && fromTrucks.length === 2
+    && fromTrucks[0].source_qc_line_id === lineA && Number(fromTrucks[0].qty_kg) === 16000 && Number(fromTrucks[1].qty_kg) === 500, JSON.stringify(fromTrucks));
+  check("unloaded total is reduced by exactly one tank (320 q - 165 q = 155 q)", (await waitingKg("IR64")) === 15500);
+  const tRest = await soakStd("TANK-2", "IR64", "2026-10-15 10:30+05:30");
+  check("next tank continues from the part-used truck", Number((await batch(tRest)).input_kg) === 15500 && (await waitingKg("IR64")) === 0 && !!lineB);
+  await expectError("no standard weight set: clear message", users.soaking_operator, async (tx) => {
+    const vId = (await one(tx, "select id from public.varieties where code = 'PB1121'")).id;
+    await tx.query("select public.start_soaking_standard($1, $2)", [eq["TANK-6"], vId]);
+  }, /NO_STANDARD_WEIGHT/);
+  await db.query("update public.varieties set std_tank_kg = 16000 where code = 'PB1121'");
+  await expectError("nothing unloaded for that variety: clear message", users.soaking_operator, async (tx) => {
+    const vId = (await one(tx, "select id from public.varieties where code = 'PB1121'")).id;
+    await tx.query("select public.start_soaking_standard($1, $2)", [eq["TANK-4"], vId]);
+  }, /NOTHING_UNLOADED|EQUIPMENT_BUSY/);
+  await expectError("milling operator cannot start soaking", users.milling_operator, async (tx) => {
+    const vId = (await one(tx, "select id from public.varieties where code = 'IR64'")).id;
+    await tx.query("select public.start_soaking_standard($1, $2)", [eq["TANK-4"], vId]);
+  }, /PERMISSION_DENIED/);
+
+
+  // Soaking stop -> dryer filling -> dryer start/stop -> own feed tank -> milling by dryer (client, 4th round).
+  console.log("\nSoaking stop, dryer start/stop, feed tanks, milling by dryer");
+  const stopDryer = (id, moist, at) => as(users.drying_operator, (tx) => one(tx, "select public.stop_dryer($1, $2, null, $3) as id", [id, moist, at])).then((r) => r.id);
+  await expectError("dryer stop needs the unload moisture", users.drying_operator, (tx) => tx.query("select public.stop_dryer($1, null)", [d1]), /moisture/);
+  const feed1 = await stopDryer(d1, 13.2, "2026-10-15 11:00+05:30");
+  const FEED1 = await batch(feed1);
+  check("dryer stop records moisture and unloads into its own feed tank (Dryer 1 -> Feed tank 1)",
+    FEED1.stage === "mill_feed" && FEED1.equipment_id === eq["MFT-1"] && Number((await batch(d1)).moisture_pct) === 13.2 && (await batch(d1)).status === "consumed");
+  const stopSoak = (id, dryer, at) => as(users.soaking_operator, (tx) => one(tx, "select public.stop_soaking_to_dryer($1, $2, $3) as id", [id, eq[dryer], at])).then((r) => r.id);
+  // Finish the lot still steaming from the old flow (it goes into Dryer 3).
+  await as(users.steaming_operator, (tx) => tx.query("select public.finish_steaming_to_dryer($1, '2026-10-15 20:00+05:30')", [mixLot]));
+  const lotA = await stopSoak(tPart, "DRYER-1", "2026-10-15 21:00+05:30");
+  const lotB = await stopSoak(tFull, "DRYER-1", "2026-10-15 22:00+05:30");
+  const lotARetry = await stopSoak(tPart, "DRYER-1", "2026-10-15 21:00+05:30");
+  const LOTA = await batch(lotA);
+  check("soaking stop goes through steaming (LOT) into the chosen dryer", LOTA.stage === "steaming" && LOTA.status === "completed" && LOTA.target_dryer_id === eq["DRYER-1"]
+    && (await batch(tPart)).status === "consumed" && lotARetry === lotA);
+  const filling = await as(users.management, (tx) => all(tx, "select * from public.dryer_filling() where dryer_id = $1", [eq["DRYER-1"]]));
+  check("Dryer 1 shows as filling with two tanks", !!lotB && Number(filling[0]?.lots) === 2 && Number(filling[0]?.filling_kg) === Number(PART.input_kg) + 16500, JSON.stringify(filling));
+  const dStart = (await as(users.drying_operator, (tx) => one(tx, "select public.start_dryer($1, '2026-10-15 22:30+05:30') as id", [eq["DRYER-1"]]))).id;
+  const DS = await batch(dStart);
+  check("dryer start takes everything filled into it", DS.stage === "drying" && DS.status === "running" && Number(DS.input_kg) === Number(PART.input_kg) + 16500);
+  await expectError("a drying dryer cannot take another tank", users.soaking_operator,
+    (tx) => tx.query("select public.stop_soaking_to_dryer($1, $2)", [tRest, eq["DRYER-1"]]), /DRYER_BUSY/);
+  await expectError("dryer start with nothing loaded: clear message", users.drying_operator,
+    (tx) => tx.query("select public.start_dryer($1)", [eq["DRYER-1"]]), /NOTHING_IN_DRYER|EQUIPMENT_BUSY/);
+  await stopDryer(dStart, 12.8, "2026-10-16 11:00+05:30");
+  const waitingFeed = await as(users.milling_operator, (tx) => all(tx, "select * from public.feed_tanks_waiting() where dryer_no = 1"));
+  check("feed tank 1 holds both dryer loads for the mill", Number(waitingFeed[0]?.lots) === 2, JSON.stringify(waitingFeed));
+  const mill2 = (await as(users.milling_operator, (tx) => one(tx, "select public.start_milling_from_dryer(1, $1, '2026-10-16 12:00+05:30') as id", [eq["MILL-1"]]))).id;
+  const M2 = await batch(mill2);
+  const m2in = await all(db, "select count(*) as n from public.batch_inputs where child_id = $1", [mill2]);
+  check("milling operator starts milling with the 'Dryer 1' button (no authorisation needed)", M2.stage === "milling" && Number(m2in[0].n) === 2 && !M2.authorization_reason);
+  await expectError("milling from an empty feed tank: clear message", users.milling_operator,
+    (tx) => tx.query("select public.start_milling_from_dryer(3, $1)", [eq["MILL-1"]]), /NOTHING_IN_FEED_TANK/);
+  const anc3 = await as(users.management, (tx) => all(tx, "select distinct b.stage from public.trace_ancestors($1) a join public.production_batches b on b.id = a.batch_id", [mill2]));
+  check("milling still traces back to the trucks", ["receipt", "soaking", "steaming", "drying", "mill_feed"].every((st) => anc3.some((a) => a.stage === st)));
+
+  // Standard recovery per variety (rice grades and by-products).
+  check("by-products include Polish, Broken, Rejection", (await all(db, "select code from public.rice_grades where kind = 'by_product'")).map((r) => r.code).sort().join() === "BROKEN,POLISH,REJECTION,RESORT");
+  await as(users.production_manager, (tx) => tx.query(
+    "insert into public.variety_output_standards (variety_id, grade_id, std_pct, min_pct, max_pct) values ($1, $2, 30, 28, 32)", [ids.IR64, grade.WAND1]));
+  await as(users.production_manager, (tx) => tx.query("update public.variety_output_standards set std_pct = 31, max_pct = 33 where variety_id = $1 and grade_id = $2", [ids.IR64, grade.WAND1]));
+  const stdRow = await one(db, "select std_pct, max_pct from public.variety_output_standards where variety_id = $1 and grade_id = $2", [ids.IR64, grade.WAND1]);
+  check("production manager sets and edits a variety's standard recovery", Number(stdRow.std_pct) === 31 && Number(stdRow.max_pct) === 33);
+  await expectError("milling operator cannot change standards", users.milling_operator, (tx) => tx.query(
+    "insert into public.variety_output_standards (variety_id, grade_id, std_pct) values ($1, $2, 10)", [ids.IR64, grade.BROKEN]), /row-level security/);
+  await expectError("range must contain the standard", users.production_manager, (tx) => tx.query(
+    "insert into public.variety_output_standards (variety_id, grade_id, std_pct, min_pct) values ($1, $2, 10, 12)", [ids.IR64, grade.BROKEN]), /check constraint/);
+  const stdAudit = await one(db, "select count(*) as n from public.audit_log where table_name = 'variety_output_standards'");
+  check("standard changes are audited", Number(stdAudit.n) >= 2);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Card, Empty, Flash, PageHeader, StatusBadge } from "@/components/ui";
-import { BatchFilters, BatchLink, ProductionNav, Qty } from "@/components/production";
+import { BatchFilters, BatchLink, ProductionNav, Qty, UnloadedSummary, type UnloadedRow } from "@/components/production";
 import { requireModule } from "@/lib/auth";
 import { STAGE_OPERATORS } from "@/lib/roles";
 import { dateTime } from "@/lib/format";
@@ -28,10 +28,11 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const { profile, supabase } = await requireModule("processing");
   const canLoad = STAGE_OPERATORS.soaking.includes(profile.role);
-  const [{ data: lines, error }, history, m] = await Promise.all([
+  const [{ data: lines, error }, history, m, unloadedRes] = await Promise.all([
     supabase.rpc("production_receivable_lines"),
     stageHistory("receipt", sp),
     loadMasters(),
+    supabase.rpc("unloaded_paddy_summary"),
   ]);
   const waiting = (lines ?? []) as Line[];
 
@@ -39,17 +40,28 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
     <>
       <PageHeader
         title="Trucks"
-        description="Unloaded trucks go straight into the soaking tanks. When a truck is loaded into a tank it gets a permanent receipt ID (RCV). The RST is kept for reference only, because it resets every few months."
+        description="Posted unloading QC adds to the unloaded paddy total. When a tank starts soaking, the trucks it drew from get a permanent receipt ID (RCV). The RST is kept for reference only, because it resets every few months."
         crumbs={[{ label: "Production", href: "/production" }]}
       />
       <ProductionNav active="receipts" />
       <Flash error={sp.error} notice={sp.notice} />
 
       <Card
-        tone="#4b5563"
-        title={`Unloaded trucks waiting for a soaking tank (${waiting.length})`}
+        tone="#1f6b32"
+        title="Unloaded paddy total"
         className="mb-6"
-        actions={canLoad ? <Link href="/production/soaking" className="btn-primary py-1">Load into a tank</Link> : undefined}
+        actions={canLoad ? <Link href="/production/soaking" className="btn-primary py-1">Start soaking a tank</Link> : undefined}
+      >
+        <UnloadedSummary rows={(unloadedRes.data ?? []) as UnloadedRow[]} />
+        <p className="border-t border-line px-5 py-3 text-[12px] text-muted">
+          No manual transfer is needed: each tank started on the Soaking page takes the variety&apos;s standard weight from this total, oldest trucks first.
+        </p>
+      </Card>
+
+      <Card
+        tone="#4b5563"
+        title={`Unloaded trucks not yet in a tank (${waiting.length})`}
+        className="mb-6"
       >
         {error ? (
           <div className="p-4 text-[13px] text-muted">Your role cannot see unloading QC. Ask a production manager or QC head to create receipts.</div>

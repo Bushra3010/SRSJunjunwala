@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AlertTriangle, ArrowDown, Factory, Gauge, PackageCheck, Truck, Wrench } from "lucide-react";
 import { Card, Empty, Flash, PageHeader, StatCard } from "@/components/ui";
-import { BatchLink, EquipmentTile, ProductionNav, Qty, StageChip, elapsedMinutes } from "@/components/production";
+import { BatchLink, EquipmentTile, ProductionNav, Qty, SoakingNow, StageChip, UnloadedSummary, elapsedMinutes, type UnloadedRow } from "@/components/production";
 import { requireModule } from "@/lib/auth";
 import { C } from "@/lib/palette";
 import { dateTime, startOfTodayIST } from "@/lib/format";
@@ -14,14 +14,16 @@ export default async function ProductionOverview({ searchParams }: { searchParam
   const { supabase } = await requireModule("processing");
   const m = await loadMasters();
   const today = startOfTodayIST();
-  const [state, running, todayRows, events, faults, unconfirmed] = await Promise.all([
+  const [state, running, todayRows, events, faults, unconfirmed, unloadedRes] = await Promise.all([
     equipmentState(m.equipment.map((e) => e.id)),
     supabase.from("production_batches").select(BATCH_COLUMNS).eq("status", "running").order("started_at"),
     supabase.from("production_batches").select("stage, output_kg, grade_id, status").gte("ended_at", today).neq("status", "cancelled"),
     supabase.from("batch_events").select("id, at, stage, event_type, qty_kg, user_id, note, batch:production_batches!batch_events_batch_id_fkey(batch_no)").order("at", { ascending: false }).limit(15),
     supabase.from("production_faults").select("id, severity, description, started_at, equipment_id").is("ended_at", null).order("started_at"),
-    supabase.from("production_batches").select("id, batch_no, stage, output_kg, output_qty_status").in("output_qty_status", ["estimated", "entered"]).neq("status", "cancelled").in("stage", ["soaking", "steaming", "output"]).order("created_at").limit(10),
+    supabase.from("production_batches").select("id, batch_no, stage, output_kg, output_qty_status").in("output_qty_status", ["entered"]).neq("status", "cancelled").eq("stage", "output").order("created_at").limit(10),
+    supabase.rpc("unloaded_paddy_summary"),
   ]);
+  const unloaded = (unloadedRes.data ?? []) as UnloadedRow[];
   const runningRows = (running.data ?? []) as Batch[];
   const t = todayRows.data ?? [];
   const sum = (stage: string) => t.filter((r) => r.stage === stage).reduce((a, r) => a + Number(r.output_kg ?? 0), 0);
@@ -59,24 +61,37 @@ export default async function ProductionOverview({ searchParams }: { searchParam
       <Flash error={sp.error} notice={sp.notice} />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard icon={Factory} color={C.blue} label="Batches running" value={runningRows.length} />
+        <StatCard icon={Factory} color={C.blue} label="Tanks soaking now" value={`${runningRows.filter((b) => b.stage === "soaking").length} of ${by("soaking_tank").length}`} />
         <StatCard icon={Truck} color={C.gold} label="Paddy received today" value={q(sum("receipt"), 1)} />
         <StatCard icon={PackageCheck} color={C.green} label="Rice output today" value={q(sum("output"), 1)} />
         <StatCard icon={Wrench} color={C.terracotta} label="Open faults" value={(faults.data ?? []).length} />
       </div>
 
+      <div className="mb-6 grid gap-6 xl:grid-cols-[1.6fr_1fr]">
+        <Card
+          tone={C.teal}
+          title={`Tanks soaking now (${runningRows.filter((b) => b.stage === "soaking").length} of ${by("soaking_tank").length})`}
+          actions={<Link href="/production/soaking" className="text-xs font-bold text-[#1f6b32] hover:underline">Start a tank →</Link>}
+        >
+          <SoakingNow batches={runningRows} equipmentById={m.equipmentById} varietyName={(id) => (id ? (m.varietyById.get(id)?.name ?? "—") : "Mixed")} userName={m.userName} />
+        </Card>
+        <Card tone="#4b5563" title="Unloaded paddy waiting">
+          <UnloadedSummary rows={unloaded} />
+        </Card>
+      </div>
+
       <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
         <Card tone={C.green} title="Plant floor">
           <div className="space-y-1 p-4">
-            {row("Trucks from the unloading bay", "/production/receipts", <p className="text-[13px] text-muted sm:col-span-2">Unloaded trucks go straight into a soaking tank.</p>, "sm:grid-cols-2")}
+            {row("Unloading bay", "/production/receipts", <p className="text-[13px] text-muted sm:col-span-2">Unloaded paddy waiting: <b className="text-ink">{q(unloaded.reduce((a, r) => a + Number(r.waiting_kg), 0))}</b>. Each tank started takes the variety&apos;s standard weight from it.</p>, "sm:grid-cols-2")}
             {arrow}
             {row("Soaking (kachi) · 12 h", "/production/soaking", by("soaking_tank").map((e) => tile(e)))}
             {arrow}
-            {row("Steaming (pakki) · one lot at a time, straight into the chosen dryer", "/production/steaming", by("steamer").map((e) => tile(e)), "sm:grid-cols-2")}
+            {row("Steaming (pakki) · automatic when a tank stops soaking", "/production/drying", <p className="text-[13px] text-muted sm:col-span-2">Each tank steams on its way into the dryer chosen when soaking stops.</p>, "sm:grid-cols-2")}
             {arrow}
             {row("Drying · 12–14 h", "/production/drying", by("dryer").map((e) => tile(e)))}
             {arrow}
-            {row("Mill feed tanks", "/production/mill-feed", by("mill_feed_tank").map((e) => tile(e)), "sm:grid-cols-2")}
+            {row("Feed tanks · Dryer 1 → Tank 1, 2 → 2, 3 → 3 (automatic)", "/production/milling", by("mill_feed_tank").map((e) => tile(e)))}
             {arrow}
             {row("Milling · 4–6 h", "/production/milling", by("mill_line").map((e) => tile(e)), "sm:grid-cols-2")}
           </div>

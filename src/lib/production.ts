@@ -136,7 +136,7 @@ export async function loadMasters() {
   const supabase = await createClient();
   const [eq, grades, varieties, profiles] = await Promise.all([
     supabase.from("production_equipment").select("*").eq("active", true).order("kind").order("number"),
-    supabase.from("rice_grades").select("id, code, name, reference_pct, sort_order").eq("active", true).order("sort_order"),
+    supabase.from("rice_grades").select("id, code, name, reference_pct, sort_order, kind").eq("active", true).order("sort_order"),
     supabase.from("varieties").select("id, code, name, std_tank_kg"),
     supabase.from("profiles").select("id, full_name, email"),
   ]);
@@ -145,7 +145,7 @@ export async function loadMasters() {
     supabase,
     equipment,
     equipmentById: new Map(equipment.map((e) => [e.id, e])),
-    grades: (grades.data ?? []) as { id: string; code: string; name: string; reference_pct: number | null; sort_order: number }[],
+    grades: (grades.data ?? []) as { id: string; code: string; name: string; reference_pct: number | null; sort_order: number; kind: "rice" | "by_product" }[],
     gradeById: new Map((grades.data ?? []).map((g) => [g.id, g])),
     varietyById: new Map((varieties.data ?? []).map((v) => [v.id, v])),
     userName: (id: string | null | undefined) => {

@@ -27,8 +27,23 @@ export default async function OutputsPage({ searchParams }: { searchParams: Prom
   const outIds = history.batches.map((b) => b.id);
   const { data: edges } = outIds.length ? await supabase.from("batch_inputs").select("child_id, parent_id").in("child_id", outIds) : { data: [] };
   const parentOf = new Map((edges ?? []).map((e) => [e.child_id, e.parent_id]));
-  const millIds = [...new Set([...parentOf.values(), ...ready.map((r) => r.batch.id)])];
-  const { data: mills } = millIds.length ? await supabase.from("production_batches").select("id, batch_no, input_kg, output_kg").in("id", millIds) : { data: [] };
+  // Recent milling batches whose outputs are compared with the variety's standards.
+  const { data: recentMills } = await supabase
+    .from("production_batches")
+    .select("id")
+    .eq("stage", "milling")
+    .in("status", ["completed", "consumed"])
+    .order("ended_at", { ascending: false })
+    .limit(8);
+  const millIds = [...new Set([...parentOf.values(), ...ready.map((r) => r.batch.id), ...(recentMills ?? []).map((r) => r.id)])];
+  const { data: mills } = millIds.length
+    ? await supabase.from("production_batches").select("id, batch_no, input_kg, output_kg, variety_id, ended_at, status").in("id", millIds)
+    : { data: [] };
+  const varietyIds = [...new Set((mills ?? []).map((x) => x.variety_id).filter(Boolean))] as string[];
+  const { data: stdRows } = varietyIds.length
+    ? await supabase.from("variety_output_standards").select("variety_id, grade_id, std_pct, min_pct, max_pct").in("variety_id", varietyIds)
+    : { data: [] };
+  const stdOf = (varietyId: string | null, gradeId: string) => (stdRows ?? []).find((r) => r.variety_id === varietyId && r.grade_id === gradeId);
   const millById = new Map((mills ?? []).map((x) => [x.id, x]));
   // Recorded outputs per milling batch for the actual-vs-reference comparison.
   const { data: siblings } = millIds.length
@@ -39,7 +54,7 @@ export default async function OutputsPage({ searchParams }: { searchParams: Prom
     <>
       <PageHeader
         title="Final rice output"
-        description="Record each grade separately. Reference recoveries come from the process diagram and are shown for comparison only — enter what was actually produced."
+        description="Record each rice grade and by-product separately. Actual recovery is compared with the variety's standards (Production → Recovery standards) and flagged when it is outside the allowed range."
         crumbs={[{ label: "Production", href: "/production" }]}
       />
       <ProductionNav active="outputs" />
@@ -60,33 +75,7 @@ export default async function OutputsPage({ searchParams }: { searchParams: Prom
                       <div className="mt-1 text-[12px] text-muted">
                         Paddy in {q(mb.input_kg)} · rice out {q(mb.output_kg)} · <b className="text-ink">{q(available)} not yet graded</b>
                       </div>
-                      <table className="mt-3 w-full text-[12px]">
-                        <thead>
-                          <tr className="text-left text-muted">
-                            <th className="py-1 font-semibold">Grade</th>
-                            <th className="py-1 text-right font-semibold">Reference</th>
-                            <th className="py-1 text-right font-semibold">Actual</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {m.grades.map((g) => {
-                            const actual = recorded
-                              .filter((s) => (s.child as unknown as { grade_id: string })?.grade_id === g.id)
-                              .reduce((a, s) => a + Number(s.qty_kg), 0);
-                            return (
-                              <tr key={g.id} className="border-t border-line">
-                                <td className="py-1 font-semibold text-ink">{g.name}</td>
-                                <td className="py-1 text-right text-muted tabular-nums">
-                                  {g.reference_pct}% ≈ {q(((g.reference_pct ?? 0) / 100) * Number(mb.input_kg))}
-                                </td>
-                                <td className="py-1 text-right font-bold text-ink tabular-nums">
-                                  {actual ? `${q(actual)} · ${((actual / Number(mb.input_kg)) * 100).toFixed(1)}%` : "—"}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                      <RecoveryTable mill={mb} recorded={recorded} grades={m.grades} stdOf={stdOf} />
                     </div>
                     <form action={recordOutput} className="grid content-start gap-3 rounded-md border border-line bg-[#fbf8ef] p-3 sm:grid-cols-2">
                       <input type="hidden" name="milling_id" value={mb.id} />
@@ -129,6 +118,29 @@ export default async function OutputsPage({ searchParams }: { searchParams: Prom
               })}
             </ul>
           )}
+        </Card>
+      )}
+
+      {(recentMills ?? []).length > 0 && (
+        <Card tone="#3e6fc0" title="Recovery vs standard — recent milling batches" className="mb-6">
+          <div className="grid gap-4 p-4 lg:grid-cols-2">
+            {(recentMills ?? []).map((r) => {
+              const mb = millById.get(r.id);
+              if (!mb) return null;
+              const recorded = (siblings ?? []).filter((x) => x.parent_id === mb.id && (x.child as unknown as { status: string })?.status !== "cancelled");
+              return (
+                <div key={mb.id} className="rounded-md border border-line p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <BatchLink no={mb.batch_no} />
+                    <span className="text-[12px] text-muted">
+                      {mb.variety_id ? m.varietyById.get(mb.variety_id)?.name : "Mixed variety"} · {q(mb.input_kg)} paddy · {dateTime(mb.ended_at)}
+                    </span>
+                  </div>
+                  <RecoveryTable mill={mb} recorded={recorded} grades={m.grades} stdOf={stdOf} />
+                </div>
+              );
+            })}
+          </div>
         </Card>
       )}
 
@@ -238,5 +250,64 @@ export default async function OutputsPage({ searchParams }: { searchParams: Prom
         )}
       </Card>
     </>
+  );
+}
+
+type Rec = { qty_kg: number; child: unknown };
+type StdRow = { std_pct: number; min_pct: number | null; max_pct: number | null } | undefined;
+
+/** Actual output per grade / by-product as % of paddy milled, against the variety's standard range. */
+function RecoveryTable({
+  mill,
+  recorded,
+  grades,
+  stdOf,
+}: {
+  mill: { input_kg: number | null; variety_id: string | null };
+  recorded: Rec[];
+  grades: { id: string; name: string; kind: string; reference_pct: number | null }[];
+  stdOf: (varietyId: string | null, gradeId: string) => StdRow;
+}) {
+  const paddy = Number(mill.input_kg) || 0;
+  return (
+    <table className="mt-3 w-full text-[12px]">
+      <thead>
+        <tr className="text-left text-muted">
+          <th className="py-1 font-semibold">Output</th>
+          <th className="py-1 text-right font-semibold">Standard</th>
+          <th className="py-1 text-right font-semibold">Actual</th>
+          <th className="py-1 text-right font-semibold">Check</th>
+        </tr>
+      </thead>
+      <tbody>
+        {grades.map((g) => {
+          const actualKg = recorded.filter((x) => (x.child as { grade_id: string })?.grade_id === g.id).reduce((a, x) => a + Number(x.qty_kg), 0);
+          const pct = paddy ? (actualKg / paddy) * 100 : 0;
+          const st = stdOf(mill.variety_id, g.id);
+          const lo = st ? (st.min_pct ?? st.std_pct) : null;
+          const hi = st ? (st.max_pct ?? st.std_pct) : null;
+          const flag = !st || !actualKg ? null : pct < Number(lo) - 0.005 ? "Below" : pct > Number(hi) + 0.005 ? "Above" : "OK";
+          return (
+            <tr key={g.id} className="border-t border-line">
+              <td className="py-1 font-semibold text-ink">
+                {g.name}
+                {g.kind === "by_product" && <span className="font-normal text-muted"> · by-product</span>}
+              </td>
+              <td className="py-1 text-right text-muted tabular-nums">
+                {st ? `${Number(st.std_pct)}%${st.min_pct !== null || st.max_pct !== null ? ` (${st.min_pct ?? st.std_pct}–${st.max_pct ?? st.std_pct})` : ""}` : "not set"}
+              </td>
+              <td className="py-1 text-right font-bold text-ink tabular-nums">{actualKg ? `${q(actualKg)} · ${pct.toFixed(1)}%` : "—"}</td>
+              <td className="py-1 text-right">
+                {flag && (
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold text-white ${flag === "OK" ? "bg-[#0a8f44]" : flag === "Below" ? "bg-[#c08a24]" : "bg-[#d10b0b]"}`}>
+                    {flag}
+                  </span>
+                )}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }

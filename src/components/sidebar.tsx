@@ -71,6 +71,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
           { key: "processing", href: "/production/soaking", label: "Soaking tanks" },
           { key: "processing", href: "/production/drying", label: "Dryers" },
           { key: "processing", href: "/production/milling", label: "Milling" },
+          { key: "processing", href: "/production/standards", label: "Recovery standards" },
           { key: "processing", href: "/production/trace", label: "Traceability" },
           { key: "processing", href: "/production/reports", label: "Reports" },
         ],

@@ -10,9 +10,11 @@ import {
   FinishSteamingForm,
   ProductionNav,
   Qty,
-  SoakingStartForm,
+  SoakingNow,
+  SoakingStartButton,
   StartForm,
-  type WaitingTruck,
+  UnloadedSummary,
+  type UnloadedRow,
 } from "@/components/production";
 import { requireModule } from "@/lib/auth";
 import { PRODUCTION_APPROVERS, STAGE_OPERATORS } from "@/lib/roles";
@@ -30,7 +32,7 @@ import {
   type Stage,
   type StageSP,
 } from "@/lib/production";
-import { millingStep, startBatch, startSteamingLot } from "@/app/(app)/production/actions";
+import { millingStep, startDryer, startMillingFromDryer, startSteamingLot, stopDryer, stopSoaking } from "@/app/(app)/production/actions";
 
 type Kind = Equipment["kind"];
 
@@ -48,10 +50,10 @@ const CONFIG: Record<
   soaking: {
     kinds: ["soaking_tank"],
     tab: "soaking",
-    description: "Trucks go from the unloading bay straight into a tank. Six tanks, 12 hours, 150–180 q per tank. A truck may be split across tanks; each tank keeps its own batch ID and history.",
+    description: "Six tanks, about 12 hours. Press Start soaking on a free tank: the variety's standard weight per tank is taken from the unloaded paddy total. Each tank keeps its own batch ID and history.",
     needsOutput: false,
     mode: "generic",
-    note: "Soaked paddy absorbs water. Weigh it if you can; otherwise leave output blank and it is carried forward as an estimate.",
+
   },
   steaming: {
     kinds: ["steamer"],
@@ -63,7 +65,7 @@ const CONFIG: Record<
   drying: {
     kinds: ["dryer"],
     tab: "drying",
-    description: "Three dryers, 12–14 hours, 270–340 q each. Any steaming lot can go into any free dryer.",
+    description: "A dryer fills as soaking tanks are stopped into it (they steam on the way). Start the dryer when it is full; stop it with the unload moisture and it unloads into its own feed tank (Dryer 1 → Feed tank 1).",
     needsOutput: true,
     moisture: true,
     mode: "drying",
@@ -78,10 +80,10 @@ const CONFIG: Record<
   milling: {
     kinds: ["mill_line"],
     tab: "milling",
-    description: "Cleaning → Dehusking → Whitener → Silky → Sortex → Grading. 4–6 hours per dryer batch.",
+    description: "Start milling with the paddy from Dryer 1, 2 or 3. Cleaning → Dehusking → Whitener → Silky → Sortex → Grading, 4–6 hours per dryer batch.",
     needsOutput: true,
     mode: "generic",
-    note: "Milling more than one mill-feed lot together needs a production manager's authorisation.",
+    note: "Mixing paddy from different dryers in one milling batch needs a production manager's authorisation.",
   },
 };
 
@@ -93,14 +95,15 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
   const canManage = PRODUCTION_APPROVERS.includes(profile.role);
   const m = await loadMasters();
   const equipment = m.equipment.filter((e) => cfg.kinds.includes(e.kind));
-  const [history, state, ready, trucks] = await Promise.all([
+  const [history, state, ready, unloadedRes] = await Promise.all([
     stageHistory(stage, sp),
     equipmentState(equipment.map((e) => e.id)),
-    // Soaking takes trucks directly: receipts already in production with paddy left, plus posted QC trucks.
-    readyBatches(stage === "soaking" ? "receipt" : meta.parent!),
-    stage === "soaking" ? m.supabase.rpc("production_receivable_lines") : Promise.resolve({ data: [] }),
+    readyBatches(meta.parent!),
+    // Soaking draws from the unloaded total per variety (standard weight per tank).
+    stage === "soaking" ? m.supabase.rpc("unloaded_paddy_summary") : Promise.resolve({ data: [] }),
   ]);
   const running = history.batches.filter((b) => b.status === "running");
+  const unloaded = (unloadedRes.data ?? []) as UnloadedRow[];
   const back = meta.href;
   const parentLabel = (b: Batch) => {
     const e = b.equipment_id ? m.equipmentById.get(b.equipment_id) : null;
@@ -123,8 +126,10 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
   const steamerBusy = steamer ? state.get(steamer.id) : undefined;
   // Any lot may go into any free dryer. A dryer is unavailable while it holds paddy or is
   // promised to a lot that is steaming right now.
-  const dryerStatus: { id: string; name: string; usual: string; busy?: string }[] = [];
-  if (cfg.mode === "steaming" || cfg.mode === "drying") {
+  const dryerStatus: { id: string; name: string; number: number; usual: string; busy?: string; fillingKg: number; fillingLots: number; fillingSince?: string }[] = [];
+  if (cfg.mode === "steaming" || cfg.mode === "drying" || stage === "soaking") {
+    const { data: fillRows } = await m.supabase.rpc("dryer_filling");
+    const filling = new Map(((fillRows ?? []) as { dryer_id: string; lots: number; filling_kg: number; first_at: string }[]).map((f) => [f.dryer_id, f]));
     const dryers = m.equipment.filter((e) => e.kind === "dryer");
     const ds = await equipmentState(dryers.map((d) => d.id));
     const { data: promised } = await m.supabase
@@ -135,11 +140,28 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
       .not("target_dryer_id", "is", null);
     for (const d of dryers) {
       const hold = ds.get(d.id)?.batch.batch_no ?? (promised ?? []).find((x) => x.target_dryer_id === d.id)?.batch_no;
-      dryerStatus.push({ id: d.id, name: d.name, usual: d.pair_no ? `usually Tanks ${d.pair_no * 2 - 1} + ${d.pair_no * 2}` : "", busy: hold });
+      const f = filling.get(d.id);
+      dryerStatus.push({
+        id: d.id,
+        name: d.name,
+        number: d.number ?? 0,
+        usual: d.pair_no ? `usually Tanks ${d.pair_no * 2 - 1} + ${d.pair_no * 2}` : "",
+        busy: hold,
+        fillingKg: Number(f?.filling_kg ?? 0),
+        fillingLots: Number(f?.lots ?? 0),
+        fillingSince: f?.first_at,
+      });
     }
   }
   const freeDryers = dryerStatus.filter((d) => !d.busy);
   const dryerName = (id: string | null | undefined) => dryerStatus.find((d) => d.id === id)?.name;
+
+  // Milling starts from one dryer's feed tank.
+  const feedWaiting = new Map<number, { waiting_kg: number; lots: number; since: string }>();
+  if (stage === "milling") {
+    const { data } = await m.supabase.rpc("feed_tanks_waiting");
+    for (const r of (data ?? []) as { dryer_no: number; waiting_kg: number; lots: number; since: string }[]) feedWaiting.set(r.dryer_no, r);
+  }
 
   // Milling: step progress for running batches.
   const steps = new Map<string, { step: string; started_at: string | null; ended_at: string | null }[]>();
@@ -172,14 +194,29 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
                     ? `${q(e.capacity_min_kg, 0)}–${q(e.capacity_max_kg, 0)} · ${e.expected_hours_min}${e.expected_hours_max !== e.expected_hours_min ? `–${e.expected_hours_max}` : ""} h`
                     : undefined
               }
-            />
+            >
+              {stage === "soaking" && canOperate && !s ? <SoakingStartButton tank={e} rows={unloaded} back={back} /> : null}
+            </EquipmentTile>
           );
         })}
       </div>
 
       <div className="mb-6 grid gap-6 xl:grid-cols-2">
-        {canOperate && (
-          <Card tone={meta.color} title={cfg.mode === "steaming" ? "Start steaming a lot" : cfg.mode === "drying" ? "Load a dryer" : stage === "soaking" ? "Load a tank from trucks" : `Start ${meta.label.toLowerCase()}`}>
+        {stage === "soaking" && (
+          <Card tone="#4b5563" title="Unloaded paddy waiting for a tank" className="xl:col-span-2">
+            <UnloadedSummary rows={unloaded} />
+            <p className="border-t border-line px-5 py-3 text-[12px] text-muted">
+              Press <b>Start soaking</b> on a free tank: the variety&apos;s standard weight per tank is taken from this total, oldest trucks first. Standard weights are set in Admin → Masters → Varieties.
+            </p>
+          </Card>
+        )}
+        {stage === "soaking" && (
+          <Card tone={meta.color} title={`Soaking now (${running.length} of ${equipment.length} tanks)`} className="xl:col-span-2">
+            <SoakingNow batches={running} equipmentById={m.equipmentById} varietyName={(id) => (id ? (m.varietyById.get(id)?.name ?? "—") : "Mixed")} userName={m.userName} />
+          </Card>
+        )}
+        {canOperate && stage !== "soaking" && (
+          <Card tone={meta.color} title={cfg.mode === "steaming" ? "Start steaming a lot" : cfg.mode === "drying" ? "Dryers: filling and start" : stage === "milling" ? "Start milling" : `Start ${meta.label.toLowerCase()}`}>
             {cfg.note && (
               <div className="px-4 pt-4">
                 <Note>{cfg.note}</Note>
@@ -245,48 +282,54 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
                 </button>
               </form>
             ) : cfg.mode === "drying" ? (
-              ready.length === 0 ? (
-                <Empty>No steamed batch is waiting for a dryer.</Empty>
-              ) : (
-                <ul className="divide-y divide-line">
-                  {ready.map(({ batch: b, available }) => (
-                    <li key={b.id}>
-                      <form action={startBatch} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                        <input type="hidden" name="stage" value="drying" />
+              <ul className="divide-y divide-line">
+                {dryerStatus.map((d) => (
+                  <li key={d.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[14px] font-bold text-ink">{d.name}</div>
+                      <div className="text-[12px] text-muted">
+                        {d.busy
+                          ? `Drying or holding dried paddy (${d.busy}) — stop it below`
+                          : d.fillingLots
+                            ? `Filling: ${q(d.fillingKg)} from ${d.fillingLots} tank${d.fillingLots > 1 ? "s" : ""} since ${dateTime(d.fillingSince)}`
+                            : "Empty — stop a soaking tank into it to start filling"}
+                      </div>
+                    </div>
+                    {!d.busy && d.fillingLots > 0 && (
+                      <form action={startDryer} className="flex flex-wrap items-center gap-2">
+                        <input type="hidden" name="dryer_id" value={d.id} />
                         <input type="hidden" name="back" value={back} />
                         <input type="hidden" name="request_id" value={randomUUID()} />
-                        <input type="hidden" name="pick" value={b.id} />
-                        <div className="min-w-0 flex-1">
-                          <BatchLink no={b.batch_no} />
-                          <div className="text-[12px] text-muted">{q(available)} steamed</div>
-                        </div>
-                        <select name="equipment_id" className="input w-auto" required defaultValue={freeDryers.find((d) => d.id === b.target_dryer_id)?.id ?? ""} aria-label="Dryer">
-                          <option value="" disabled>
-                            Dryer…
-                          </option>
-                          {freeDryers.map((d) => (
-                            <option key={d.id} value={d.id}>
-                              {d.name}
-                            </option>
-                          ))}
-                        </select>
-                        <input type="datetime-local" name="started_at" className="input w-auto" aria-label="Start time (blank = now)" />
-                        <button className="btn-primary" disabled={freeDryers.length === 0}>
-                          Load dryer
+                        <input type="datetime-local" name="started_at" className="input w-auto" aria-label={`${d.name} start time (blank = now)`} />
+                        <button className="btn-primary">Start drying</button>
+                      </form>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : stage === "milling" ? (
+              <div className="space-y-3 p-4">
+                <p className="text-[13px] text-muted">Which dryer&apos;s paddy did the mill receive? Each dryer unloads into its own feed tank.</p>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {[1, 2, 3].map((n) => {
+                    const w = feedWaiting.get(n);
+                    return (
+                      <form key={n} action={startMillingFromDryer} className="flex flex-col gap-2 rounded-md border border-line p-3">
+                        <input type="hidden" name="dryer_no" value={n} />
+                        <input type="hidden" name="line_id" value={equipment[0]?.id} />
+                        <input type="hidden" name="back" value={back} />
+                        <input type="hidden" name="request_id" value={randomUUID()} />
+                        <div className="text-[14px] font-bold text-ink">Dryer {n}</div>
+                        <div className="text-[12px] text-muted">{w ? `${q(w.waiting_kg)} waiting in feed tank ${n}` : `Feed tank ${n} is empty`}</div>
+                        <input type="datetime-local" name="started_at" className="input" aria-label={`Milling start for Dryer ${n} paddy (blank = now)`} />
+                        <button className="btn-primary" disabled={!w}>
+                          Start milling Dryer {n}
                         </button>
                       </form>
-                    </li>
-                  ))}
-                </ul>
-              )
-            ) : stage === "soaking" ? (
-              <SoakingStartForm
-                tanks={equipment.filter((e) => !state.get(e.id))}
-                trucks={(trucks.data ?? []) as WaitingTruck[]}
-                receipts={ready.map((c) => ({ ...c, label: parentLabel(c.batch) }))}
-                back={back}
-                canAuthorize={canManage}
-              />
+                    );
+                  })}
+                </div>
+              </div>
             ) : (
               <StartForm
                 stage={stage}
@@ -301,7 +344,7 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
         )}
 
         {stage !== "mill_feed" && (
-          <Card tone="#3e6fc0" title={`Running now (${running.length})`}>
+          <Card tone="#3e6fc0" title={stage === "soaking" ? `Finish soaking (${running.length})` : `Running now (${running.length})`}>
             {running.length === 0 ? (
               <Empty>Nothing running.</Empty>
             ) : (
@@ -349,6 +392,52 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
                       <div className="flex flex-wrap items-start gap-2">
                         {stage === "steaming" ? (
                           <FinishSteamingForm batch={b} back={back} dryer={dryerName(b.target_dryer_id) ?? "the dryer"} />
+                        ) : stage === "soaking" ? (
+                          <form action={stopSoaking} className="flex flex-wrap items-end gap-2 rounded-md border border-line bg-[#fbf8ef] p-3">
+                            <input type="hidden" name="id" value={b.id} />
+                            <input type="hidden" name="batch_no" value={b.batch_no} />
+                            <input type="hidden" name="back" value={back} />
+                            <div>
+                              <label className="label" htmlFor={`dry-${b.id}`}>Into dryer</label>
+                              <select id={`dry-${b.id}`} name="dryer_id" className="input w-auto" required defaultValue={
+                                (dryerStatus.find((d) => !d.busy && d.fillingLots > 0) ?? dryerStatus.find((d) => !d.busy && d.number === m.equipmentById.get(b.equipment_id ?? "")?.pair_no) ?? dryerStatus.find((d) => !d.busy))?.id ?? ""
+                              }>
+                                <option value="" disabled>
+                                  {dryerStatus.some((d) => !d.busy) ? "Choose…" : "All dryers busy"}
+                                </option>
+                                {dryerStatus.map((d) => (
+                                  <option key={d.id} value={d.id} disabled={!!d.busy}>
+                                    {d.name}
+                                    {d.busy ? " — drying" : d.fillingLots ? ` — filling (${q(d.fillingKg)})` : " — empty"}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="label" htmlFor={`end-${b.id}`}>Soaking stop (blank = now)</label>
+                              <input id={`end-${b.id}`} name="ended_at" type="datetime-local" className="input w-auto" />
+                            </div>
+                            <button className="btn-primary">Stop soaking → steam into dryer</button>
+                          </form>
+                        ) : stage === "drying" ? (
+                          <form action={stopDryer} className="flex flex-wrap items-end gap-2 rounded-md border border-line bg-[#fbf8ef] p-3">
+                            <input type="hidden" name="id" value={b.id} />
+                            <input type="hidden" name="batch_no" value={b.batch_no} />
+                            <input type="hidden" name="back" value={back} />
+                            <div>
+                              <label className="label" htmlFor={`m-${b.id}`}>Unload moisture %</label>
+                              <input id={`m-${b.id}`} name="moisture_pct" type="number" step="0.1" min="0" max="60" className="input w-28" required />
+                            </div>
+                            <div>
+                              <label className="label" htmlFor={`o-${b.id}`}>Output q (if weighed)</label>
+                              <input id={`o-${b.id}`} name="output_q" type="number" step="any" min="0.01" className="input w-32" placeholder="blank = estimate" />
+                            </div>
+                            <div>
+                              <label className="label" htmlFor={`e-${b.id}`}>Dryer stop (blank = now)</label>
+                              <input id={`e-${b.id}`} name="ended_at" type="datetime-local" className="input w-auto" />
+                            </div>
+                            <button className="btn-primary">Stop dryer → unload to feed tank {m.equipmentById.get(b.equipment_id ?? "")?.number ?? ""}</button>
+                          </form>
                         ) : (
                           <CompleteForm batch={b} back={back} needsOutput={cfg.needsOutput} moisture={cfg.moisture} />
                         )}

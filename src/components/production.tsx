@@ -1,20 +1,19 @@
 import Link from "next/link";
 import { randomUUID } from "node:crypto";
 import clsx from "clsx";
-import { Badge, StatusBadge } from "@/components/ui";
+import { Badge, Empty, StatusBadge } from "@/components/ui";
 import { dateTime } from "@/lib/format";
 import { STAGE_META, hours, q, type Batch, type Equipment, type Stage } from "@/lib/production";
-import { cancelBatch, completeBatch, finishSteaming, startBatch, startSoaking } from "@/app/(app)/production/actions";
+import { cancelBatch, completeBatch, finishSteaming, startBatch, startSoaking, startSoakingStandard } from "@/app/(app)/production/actions";
 
 export const PROD_TABS = [
   { key: "overview", label: "Overview", href: "/production" },
   { key: "receipts", label: "Trucks", href: "/production/receipts" },
   { key: "soaking", label: "Soaking tanks", href: "/production/soaking" },
-  { key: "steaming", label: "Steaming lots", href: "/production/steaming" },
   { key: "drying", label: "Dryers", href: "/production/drying" },
-  { key: "mill-feed", label: "Mill feed", href: "/production/mill-feed" },
   { key: "milling", label: "Milling", href: "/production/milling" },
   { key: "outputs", label: "Outputs", href: "/production/outputs" },
+  { key: "standards", label: "Recovery standards", href: "/production/standards" },
   { key: "trace", label: "Traceability", href: "/production/trace" },
   { key: "timeline", label: "Timeline", href: "/production/timeline" },
   { key: "faults", label: "Faults", href: "/production/faults" },
@@ -87,11 +86,14 @@ export function EquipmentTile({
   batch,
   available,
   sub,
+  children,
 }: {
   eq: Equipment;
   batch?: Batch | null;
   available?: number;
   sub?: React.ReactNode;
+  /** Extra controls shown at the bottom of the tile (e.g. Start soaking). */
+  children?: React.ReactNode;
 }) {
   const running = batch?.status === "running";
   const holding = batch && batch.status === "completed" && (available ?? 0) > 0;
@@ -131,6 +133,7 @@ export function EquipmentTile({
       ) : (
         <div className="text-[12px] text-muted">Empty — ready to load</div>
       )}
+      {children}
     </div>
   );
 }
@@ -534,5 +537,127 @@ export function FinishSteamingForm({ batch, back, dryer }: { batch: Batch; back:
       </div>
       <button className="btn-primary">Steaming done → load {dryer}</button>
     </form>
+  );
+}
+
+export type UnloadedRow = { variety_id: string; variety: string; std_tank_kg: number | null; waiting_kg: number; trucks: number; oldest_at: string };
+
+/** Unloaded paddy waiting for a soaking tank, per variety. */
+export function UnloadedSummary({ rows }: { rows: UnloadedRow[] }) {
+  if (!rows.length) return <Empty>No unloaded paddy is waiting. It appears here when the unloading QC is posted.</Empty>;
+  return (
+    <div className="overflow-x-auto">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Variety</th>
+            <th className="text-right">Waiting</th>
+            <th className="text-right">Per tank</th>
+            <th className="text-right">≈ Tanks</th>
+            <th>Trucks</th>
+            <th>Since</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.variety_id}>
+              <td className="font-bold text-ink">{r.variety}</td>
+              <td className="text-right">
+                <Qty kg={r.waiting_kg} />
+              </td>
+              <td className="text-right whitespace-nowrap">{r.std_tank_kg ? q(r.std_tank_kg) : <span className="text-[#b5532f]">not set</span>}</td>
+              <td className="text-right font-bold text-ink tabular-nums">{r.std_tank_kg ? (Number(r.waiting_kg) / Number(r.std_tank_kg)).toFixed(1) : "—"}</td>
+              <td className="tabular-nums">{r.trucks}</td>
+              <td className="text-xs whitespace-nowrap">{dateTime(r.oldest_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** One click: fill this tank with the variety's standard weight from the unloaded total. */
+export function SoakingStartButton({ tank, rows, back }: { tank: Equipment; rows: UnloadedRow[]; back: string }) {
+  const usable = rows.filter((r) => r.std_tank_kg);
+  if (!rows.length) return <p className="text-[11px] text-muted">Nothing unloaded to soak.</p>;
+  if (!usable.length) return <p className="text-[11px] text-[#b5532f]">Set the standard weight per tank in Admin → Masters.</p>;
+  return (
+    <form action={startSoakingStandard} className="flex flex-col gap-1.5 border-t border-line pt-2">
+      <input type="hidden" name="tank_id" value={tank.id} />
+      <input type="hidden" name="back" value={back} />
+      <input type="hidden" name="request_id" value={randomUUID()} />
+      {usable.length === 1 ? (
+        <input type="hidden" name="variety_id" value={usable[0].variety_id} />
+      ) : (
+        <select name="variety_id" className="input py-1 text-[12px]" aria-label={`Variety for ${tank.name}`} defaultValue={usable[0].variety_id}>
+          {usable.map((r) => (
+            <option key={r.variety_id} value={r.variety_id}>
+              {r.variety} — {q(r.std_tank_kg)} per tank
+            </option>
+          ))}
+        </select>
+      )}
+      <button className="btn-primary py-1 text-[12px]">
+        Start soaking{usable.length === 1 ? ` · ${usable[0].variety} ${q(Math.min(Number(usable[0].std_tank_kg), Number(usable[0].waiting_kg)))}` : ""}
+      </button>
+    </form>
+  );
+}
+
+/** Tanks soaking right now, with start, expected finish and elapsed time. */
+export function SoakingNow({ batches, equipmentById, varietyName, userName }: {
+  batches: Batch[];
+  equipmentById: Map<string, Equipment>;
+  varietyName: (id: string | null) => string;
+  userName: (id: string | null) => string;
+}) {
+  const running = batches.filter((b) => b.stage === "soaking" && b.status === "running");
+  if (!running.length) return <Empty>No tank is soaking right now.</Empty>;
+  return (
+    <div className="overflow-x-auto">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Tank</th>
+            <th>Batch</th>
+            <th>Variety</th>
+            <th className="text-right">Paddy</th>
+            <th>Started</th>
+            <th>Expected end</th>
+            <th>Soaking for</th>
+            <th>Started by</th>
+          </tr>
+        </thead>
+        <tbody>
+          {running.map((b) => {
+            const eq = b.equipment_id ? equipmentById.get(b.equipment_id) : undefined;
+            const hoursExp = eq?.expected_hours_max ?? 12;
+            const end = b.started_at ? new Date(new Date(b.started_at).getTime() + hoursExp * 3600000).toISOString() : null;
+            const mins = elapsedMinutes(b);
+            const overdue = mins !== null && mins > hoursExp * 60;
+            return (
+              <tr key={b.id}>
+                <td className="font-bold whitespace-nowrap text-ink">{eq?.name.replace("Soaking ", "") ?? "—"}</td>
+                <td>
+                  <BatchLink no={b.batch_no} />
+                </td>
+                <td>{varietyName(b.variety_id)}</td>
+                <td className="text-right">
+                  <Qty kg={b.input_kg} />
+                </td>
+                <td className="text-xs whitespace-nowrap">{dateTime(b.started_at)}</td>
+                <td className="text-xs whitespace-nowrap">{dateTime(end)}</td>
+                <td className={`text-xs font-bold whitespace-nowrap ${overdue ? "text-[#d10b0b]" : "text-ink"}`}>
+                  {hours(mins)}
+                  {overdue ? " · overdue" : ""}
+                </td>
+                <td className="text-xs whitespace-nowrap">{userName(b.operator_id)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

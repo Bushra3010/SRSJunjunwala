@@ -255,3 +255,144 @@ export async function startSteamingLot(fd: FormData) {
   const { data: b } = await supabase.from("production_batches").select("batch_no").eq("id", data).single();
   done(path, `Lot ${b?.batch_no} steaming started`);
 }
+
+/** One click: soak a tank with the variety's standard weight, taken from the unloaded total (oldest trucks first). */
+export async function startSoakingStandard(fd: FormData) {
+  const path = backPath(fd, "/production/soaking");
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("start_soaking_standard", {
+    p_tank: str(fd, "tank_id"),
+    p_variety: str(fd, "variety_id"),
+    p_started_at: istInput(str(fd, "started_at")),
+    p_request: optStr(fd, "request_id"),
+    p_remarks: optStr(fd, "remarks"),
+  });
+  if (error) back(path, { error });
+  const { data: b } = await supabase.from("production_batches").select("batch_no, input_kg, equipment_id").eq("id", data).single();
+  done(path, `${b?.batch_no} soaking started with ${(Number(b?.input_kg ?? 0) / 100).toLocaleString("en-IN")} q`);
+}
+
+/** Soaking stop: the tank goes through steaming straight into the chosen dryer (which starts filling). */
+export async function stopSoaking(fd: FormData) {
+  const path = backPath(fd, "/production/soaking");
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("stop_soaking_to_dryer", {
+    p_soaking: str(fd, "id"),
+    p_dryer: str(fd, "dryer_id"),
+    p_ended_at: istInput(str(fd, "ended_at")),
+    p_remarks: optStr(fd, "remarks"),
+  });
+  if (error) back(path, { error });
+  done(path, `${str(fd, "batch_no")} soaking stopped — steamed into the dryer`);
+}
+
+/** Dryer start: everything filled into the dryer starts drying. */
+export async function startDryer(fd: FormData) {
+  const path = backPath(fd, "/production/drying");
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("start_dryer", {
+    p_dryer: str(fd, "dryer_id"),
+    p_started_at: istInput(str(fd, "started_at")),
+    p_request: optStr(fd, "request_id"),
+  });
+  if (error) back(path, { error });
+  const { data: b } = await supabase.from("production_batches").select("batch_no").eq("id", data).single();
+  done(path, `${b?.batch_no} drying started`);
+}
+
+/** Dryer stop: unload moisture, then the paddy goes to the dryer's own feed tank. */
+export async function stopDryer(fd: FormData) {
+  const path = backPath(fd, "/production/drying");
+  const moisture = str(fd, "moisture_pct");
+  const out = qtl(fd, "output_q");
+  if (!moisture || !Number.isFinite(Number(moisture))) back(path, { error: "Enter the unload moisture %" });
+  if (Number.isNaN(out)) back(path, { error: "Output must be a number of quintals" });
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("stop_dryer", {
+    p_drying: str(fd, "id"),
+    p_moisture_pct: Number(moisture),
+    p_output_kg: out,
+    p_ended_at: istInput(str(fd, "ended_at")),
+    p_remarks: optStr(fd, "remarks"),
+  });
+  if (error) back(path, { error });
+  done(path, `${str(fd, "batch_no")} stopped at ${moisture}% moisture and unloaded into its feed tank`);
+}
+
+/** Milling: start with the paddy from one dryer's feed tank. */
+export async function startMillingFromDryer(fd: FormData) {
+  const path = backPath(fd, "/production/milling");
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("start_milling_from_dryer", {
+    p_dryer_no: Number(str(fd, "dryer_no")),
+    p_line: str(fd, "line_id"),
+    p_started_at: istInput(str(fd, "started_at")),
+    p_request: optStr(fd, "request_id"),
+    p_remarks: optStr(fd, "remarks"),
+  });
+  if (error) back(path, { error });
+  const { data: b } = await supabase.from("production_batches").select("batch_no").eq("id", data).single();
+  done(path, `${b?.batch_no} milling started with Dryer ${str(fd, "dryer_no")} paddy`);
+}
+
+/** Save one variety's standard recovery (% of paddy milled) for every output. */
+export async function saveStandards(fd: FormData) {
+  const varietyId = str(fd, "variety_id");
+  const path = `/production/standards?variety=${varietyId}`;
+  const supabase = await createClient();
+  const pct = (k: string) => {
+    const v = str(fd, k);
+    if (v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : NaN;
+  };
+  const upserts: { variety_id: string; grade_id: string; std_pct: number; min_pct: number | null; max_pct: number | null }[] = [];
+  const clear: string[] = [];
+  for (const gradeId of fd.getAll("grade_id").map(String)) {
+    const std = pct(`std_${gradeId}`);
+    const min = pct(`min_${gradeId}`);
+    const max = pct(`max_${gradeId}`);
+    if ([std, min, max].some((n) => Number.isNaN(n))) back(path, { error: "Percentages must be numbers" });
+    if (std === null) {
+      clear.push(gradeId);
+      continue;
+    }
+    if (std < 0 || std > 100 || (min !== null && min > std) || (max !== null && max < std)) {
+      back(path, { error: "Each standard must be 0–100%, with the minimum at or below it and the maximum at or above it" });
+    }
+    upserts.push({ variety_id: varietyId, grade_id: gradeId, std_pct: std!, min_pct: min, max_pct: max });
+  }
+  if (upserts.length) {
+    const { error } = await supabase.from("variety_output_standards").upsert(upserts, { onConflict: "variety_id,grade_id" });
+    if (error) back(path, { error });
+  }
+  if (clear.length) {
+    const { error } = await supabase.from("variety_output_standards").delete().eq("variety_id", varietyId).in("grade_id", clear);
+    if (error) back(path, { error });
+  }
+  const total = upserts.reduce((a, u) => a + u.std_pct, 0);
+  done(path, `Standards saved (total ${total.toLocaleString("en-IN", { maximumFractionDigits: 2 })}% of paddy)`);
+}
+
+/** Add a new output (rice grade or by-product such as polish or husk). */
+export async function addOutputType(fd: FormData) {
+  const path = backPath(fd, "/production/standards");
+  const name = str(fd, "name");
+  const kind = str(fd, "kind") === "rice" ? "rice" : "by_product";
+  if (!name) back(path, { error: "Enter a name" });
+  const code = (str(fd, "code") || name).toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 20);
+  const supabase = await createClient();
+  const { data: last } = await supabase.from("rice_grades").select("sort_order").order("sort_order", { ascending: false }).limit(1).maybeSingle();
+  const { error } = await supabase.from("rice_grades").insert({ code, name, kind, sort_order: (last?.sort_order ?? 0) + 1 });
+  if (error) back(path, { error: error.message.includes("duplicate") ? "An output with that name or code already exists" : error });
+  done(path, `${name} added`);
+}
+
+/** Hide or show an output in forms (history is kept). */
+export async function toggleOutputType(fd: FormData) {
+  const path = backPath(fd, "/production/standards");
+  const supabase = await createClient();
+  const { error } = await supabase.from("rice_grades").update({ active: str(fd, "active") === "true" }).eq("id", str(fd, "id"));
+  if (error) back(path, { error });
+  done(path, "Output updated");
+}
