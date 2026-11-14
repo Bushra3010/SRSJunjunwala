@@ -6,7 +6,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { back, optStr, str } from "@/lib/actions";
 
-const uuid = z.string().uuid();
+const uuid = z.guid();
 const optUuid = z
   .string()
   .optional()

@@ -8,8 +8,8 @@ import { getPlantId } from "@/lib/auth";
 import { back, optStr, str } from "@/lib/actions";
 
 const Line = z.object({
-  variety_id: z.string().uuid({ message: "choose a variety" }),
-  ordered_kg: z.coerce.number().positive({ message: "quantity must be more than 0" }),
+  variety_id: z.guid({ error: "choose a variety" }),
+  ordered_kg: z.coerce.number().positive({ error: "quantity must be more than 0" }),
   rate_per_qtl: z
     .union([z.literal(""), z.coerce.number().min(0)])
     .transform((v) => (v === "" ? null : v)),

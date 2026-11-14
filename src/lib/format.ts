@@ -61,5 +61,14 @@ export function errorMessage(err: { message?: string } | null | undefined) {
     MULTI_INPUT: "Authorisation needed",
     MIXED_VARIETY: "Mixed variety",
   };
-  return msg.replace(/^([A-Z_]{4,}): /, (m, code: string) => (labels[code] ? `${labels[code]}: ` : m));
+  return (
+    msg
+      .replace(/^([A-Z_]{4,}): /, (m, code: string) => (labels[code] ? `${labels[code]}: ` : m))
+      // Database messages count kg; the plant floor works in quintals (1 q = 100 kg), so show both.
+      .replace(/(\d+(?:\.\d+)?) kg\b/g, (_m, n: string) => {
+        const kgVal = Number(n);
+        const qVal = (kgVal / 100).toLocaleString("en-IN", { maximumFractionDigits: 3 });
+        return `${qVal} q / ${kgVal.toLocaleString("en-IN", { maximumFractionDigits: 2 })} kg`;
+      })
+  );
 }
