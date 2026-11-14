@@ -6,7 +6,7 @@ import { STAGE_OPERATORS } from "@/lib/roles";
 import { dateTime } from "@/lib/format";
 import { loadMasters, stageHistory, type StageSP } from "@/lib/production";
 
-export const metadata = { title: "Truck receipts · Production" };
+export const metadata = { title: "Trucks · Production" };
 
 type Line = {
   qc_line_id: string;
