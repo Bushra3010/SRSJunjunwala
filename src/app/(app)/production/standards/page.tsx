@@ -87,7 +87,7 @@ export default async function StandardsPage({ searchParams }: { searchParams: Pr
                                 min="0"
                                 max="100"
                                 defaultValue={st ? (k === "std" ? st.std_pct : k === "min" ? (st.min_pct ?? "") : (st.max_pct ?? "")) : ""}
-                                placeholder={k === "std" && o.reference_pct !== null ? String(o.reference_pct) : ""}
+                                placeholder={k === "std" && o.reference_pct !== null ? `e.g. ${o.reference_pct}` : "—"}
                                 disabled={!canEdit}
                                 className="input w-24 text-right"
                                 aria-label={`${o.name} ${k === "std" ? "standard" : k === "min" ? "minimum" : "maximum"} % for ${variety!.name}`}
