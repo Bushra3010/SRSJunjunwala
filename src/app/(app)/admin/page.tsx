@@ -358,7 +358,7 @@ async function Masters({ supabase }: { supabase: Sb }) {
 
   return (
     <>
-      <Section title="Varieties" description="Paddy and rice varieties used in QC, orders and stock. Bag weight and estimated yield drive the calculations.">
+      <Section title="Varieties" description="Paddy and rice varieties used in QC, orders, stock and production. Bag weight, estimated yield and the standard paddy weight per soaking tank (tanks are not weighed) drive the calculations.">
         <div className={grid}>
           {varieties?.map((v, i) => (
             <AppCard
@@ -366,13 +366,14 @@ async function Masters({ supabase }: { supabase: Sb }) {
               icon={Wheat}
               iconColor={rot(i)}
               title={v.name}
-              description={`Code ${v.code} · default bag ${num(v.default_bag_weight_kg)} kg · est. yield ${num(v.est_yield_pct)}%`}
+              description={`Code ${v.code} · bag ${num(v.default_bag_weight_kg)} kg · yield ${num(v.est_yield_pct)}% · ${v.std_tank_kg ? `${num(Number(v.std_tank_kg) / 100)} q per tank` : "no standard tank weight yet"}`}
               footer={
                 <>
-                  <form action={updateVariety} className="flex items-center gap-2">
+                  <form action={updateVariety} className="flex flex-wrap items-center gap-2">
                     <input type="hidden" name="id" value={v.id} />
                     <input name="default_bag_weight_kg" defaultValue={v.default_bag_weight_kg} className="input w-20" aria-label={`${v.name} bag weight kg`} title="Bag weight (kg)" />
                     <input name="est_yield_pct" defaultValue={v.est_yield_pct} className="input w-20" aria-label={`${v.name} yield %`} title="Estimated yield %" />
+                    <input name="std_tank_q" defaultValue={v.std_tank_kg ? Number(v.std_tank_kg) / 100 : ""} placeholder="q/tank" className="input w-24" aria-label={`${v.name} standard weight per tank in quintals`} title="Standard paddy weight per soaking tank (quintals)" />
                     <button className="btn-secondary">Save</button>
                   </form>
                   <ActiveSwitch table="varieties" id={v.id} active={v.active} name={v.name} />

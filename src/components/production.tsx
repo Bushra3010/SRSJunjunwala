@@ -4,14 +4,13 @@ import clsx from "clsx";
 import { Badge, StatusBadge } from "@/components/ui";
 import { dateTime } from "@/lib/format";
 import { STAGE_META, hours, q, type Batch, type Equipment, type Stage } from "@/lib/production";
-import { cancelBatch, completeBatch, startBatch } from "@/app/(app)/production/actions";
+import { cancelBatch, completeBatch, finishSteaming, startBatch, startSoaking } from "@/app/(app)/production/actions";
 
 export const PROD_TABS = [
   { key: "overview", label: "Overview", href: "/production" },
-  { key: "receipts", label: "Receipts", href: "/production/receipts" },
-  { key: "precleaning", label: "Pre-cleaning", href: "/production/precleaning" },
+  { key: "receipts", label: "Trucks", href: "/production/receipts" },
   { key: "soaking", label: "Soaking tanks", href: "/production/soaking" },
-  { key: "steaming", label: "Steaming", href: "/production/steaming" },
+  { key: "steaming", label: "Steaming lots", href: "/production/steaming" },
   { key: "drying", label: "Dryers", href: "/production/drying" },
   { key: "mill-feed", label: "Mill feed", href: "/production/mill-feed" },
   { key: "milling", label: "Milling", href: "/production/milling" },
@@ -212,9 +211,9 @@ export function StartForm({
                     <input
                       name={`qty_${b.id}`}
                       type="number"
-                      step="0.01"
+                      step="any"
                       min="0.01"
-                      defaultValue={(available / 100).toFixed(2)}
+                      defaultValue={available / 100}
                       className="input w-28 text-right"
                       aria-label={`Quantity from ${b.batch_no} in quintals`}
                     />
@@ -401,4 +400,139 @@ export function BatchFilters({ action, sp }: { action: string; sp: { q?: string;
 
 export function QtyStatusBadge({ status }: { status: string | null }) {
   return status ? <StatusBadge status={status} /> : <Badge>—</Badge>;
+}
+
+export type WaitingTruck = {
+  qc_line_id: string;
+  std_tank_kg: number | null;
+  rst: number;
+  rst_cycle: string | null;
+  vehicle_no: string;
+  supplier: string | null;
+  variety: string | null;
+  accepted_kg: number;
+};
+
+/** Load one soaking tank straight from posted trucks (and trucks already partly loaded). Quantities in quintals. */
+export function SoakingStartForm({
+  tanks,
+  trucks,
+  receipts,
+  back,
+  canAuthorize,
+}: {
+  tanks: Equipment[];
+  trucks: WaitingTruck[];
+  receipts: Candidate[];
+  back: string;
+  canAuthorize: boolean;
+}) {
+  const none = trucks.length === 0 && receipts.length === 0;
+  return (
+    <form action={startSoaking} className="space-y-4 p-4">
+      <input type="hidden" name="back" value={back} />
+      <input type="hidden" name="request_id" value={randomUUID()} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="soak-tank">Tank</label>
+          <select id="soak-tank" name="equipment_id" className="input" required defaultValue="">
+            <option value="" disabled>
+              {tanks.length ? "Select an empty tank…" : "All tanks are in use"}
+            </option>
+            {tanks.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label" htmlFor="soak-start">Soaking start (blank = now)</label>
+          <input id="soak-start" type="datetime-local" name="started_at" className="input" />
+        </div>
+      </div>
+      <fieldset>
+        <legend className="label">Trucks (quantity into this tank, in quintals — defaults to the variety&apos;s standard tank weight)</legend>
+        {none ? (
+          <p className="rounded-md border border-dashed border-line px-3 py-4 text-center text-[13px] text-muted">
+            No unloaded truck is waiting. Post the unloading QC first.
+          </p>
+        ) : (
+          <ul className="divide-y divide-line rounded-md border border-line">
+            {trucks.map((t) => (
+              <li key={t.qc_line_id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                <label className="flex min-w-0 flex-1 items-center gap-2.5">
+                  <input type="checkbox" name="pick" value={`qc:${t.qc_line_id}`} className="size-4 accent-[#1f6b32]" />
+                  <span className="min-w-0">
+                    <span className="block text-[13px] font-bold text-ink">
+                      RST {t.rst} · {t.vehicle_no}
+                    </span>
+                    <span className="block text-[11px] text-muted">
+                      {t.supplier ?? "—"} · {t.variety ?? "—"} · {q(t.accepted_kg)} unloaded
+                      {t.std_tank_kg ? ` · standard ${q(t.std_tank_kg)} per tank` : " · no standard tank weight set"}
+                    </span>
+                  </span>
+                </label>
+                <QtyBox name={`qty_qc:${t.qc_line_id}`} kg={t.std_tank_kg ? Math.min(Number(t.std_tank_kg), Number(t.accepted_kg)) : t.accepted_kg} label={`RST ${t.rst}`} />
+              </li>
+            ))}
+            {receipts.map(({ batch: b, available, label }) => (
+              <li key={b.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                <label className="flex min-w-0 flex-1 items-center gap-2.5">
+                  <input type="checkbox" name="pick" value={`b:${b.id}`} className="size-4 accent-[#1f6b32]" />
+                  <span className="min-w-0">
+                    <span className="block font-mono text-[13px] font-bold text-ink">{b.batch_no}</span>
+                    <span className="block text-[11px] text-muted">
+                      {label} {q(available)} left on this truck
+                    </span>
+                  </span>
+                </label>
+                <QtyBox name={`qty_b:${b.id}`} kg={available} label={b.batch_no} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </fieldset>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="soak-remarks">Remarks</label>
+          <input id="soak-remarks" name="remarks" className="input" placeholder="Optional" />
+        </div>
+        {canAuthorize && (
+          <div>
+            <label className="label" htmlFor="soak-auth">Manager authorisation (only if over quantity)</label>
+            <input id="soak-auth" name="authorization" className="input" placeholder="Reason, recorded in history" />
+          </div>
+        )}
+      </div>
+      <button className="btn-primary" disabled={none || tanks.length === 0}>
+        Start soaking
+      </button>
+    </form>
+  );
+}
+
+function QtyBox({ name, kg, label }: { name: string; kg: number; label: string }) {
+  return (
+    <span className="flex items-center gap-1">
+      <input name={name} type="number" step="any" min="0.01" defaultValue={Number(kg) / 100} className="input w-28 text-right" aria-label={`Quantity from ${label} in quintals`} />
+      <span className="text-xs text-muted">q</span>
+    </span>
+  );
+}
+
+/** Steaming finished: close the lot and load the dryer chosen when it started. */
+export function FinishSteamingForm({ batch, back, dryer }: { batch: Batch; back: string; dryer: string }) {
+  return (
+    <form action={finishSteaming} className="flex flex-wrap items-end gap-2 rounded-md border border-line bg-[#fbf8ef] p-3">
+      <input type="hidden" name="id" value={batch.id} />
+      <input type="hidden" name="batch_no" value={batch.batch_no} />
+      <input type="hidden" name="back" value={back} />
+      <div>
+        <label className="label">Steaming finished at (blank = now)</label>
+        <input name="ended_at" type="datetime-local" className="input w-auto" />
+      </div>
+      <button className="btn-primary">Steaming done → load {dryer}</button>
+    </form>
+  );
 }

@@ -198,3 +198,60 @@ export async function resolveFault(fd: FormData) {
   if (error) back(path, { error });
   done(path, "Fault resolved");
 }
+
+/** Load a soaking tank straight from trucks. Picks are "qc:<qc line id>" (truck not yet in production) or "b:<receipt batch id>". */
+export async function startSoaking(fd: FormData) {
+  const path = backPath(fd, "/production/soaking");
+  const picked = fd.getAll("pick").map(String);
+  if (!picked.length) back(path, { error: "Select at least one truck" });
+  const inputs = picked.map((p) => {
+    const [kind, id] = p.split(":");
+    const qty = qtl(fd, `qty_${p}`);
+    return kind === "qc" ? { qc_line_id: id, qty_kg: qty } : { batch_id: id, qty_kg: qty };
+  });
+  if (inputs.some((i) => i.qty_kg === null || Number.isNaN(i.qty_kg))) back(path, { error: "Enter the quantity for each truck in quintals" });
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("start_soaking_from_trucks", {
+    p_tank: str(fd, "equipment_id"),
+    p_inputs: inputs,
+    p_started_at: istInput(str(fd, "started_at")),
+    p_request: optStr(fd, "request_id"),
+    p_remarks: optStr(fd, "remarks"),
+    p_authorization: optStr(fd, "authorization"),
+  });
+  if (error) back(path, { error });
+  const { data: b } = await supabase.from("production_batches").select("batch_no").eq("id", data).single();
+  done(path, `${b?.batch_no} soaking started`);
+}
+
+/** Steaming done: the lot goes straight into its fixed dryer. */
+export async function finishSteaming(fd: FormData) {
+  const path = backPath(fd, "/production/steaming");
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("finish_steaming_to_dryer", {
+    p_lot: str(fd, "id"),
+    p_ended_at: istInput(str(fd, "ended_at")),
+    p_remarks: optStr(fd, "remarks"),
+  });
+  if (error) back(path, { error });
+  const { data: b } = await supabase.from("production_batches").select("batch_no").eq("id", data).single();
+  done(path, `${str(fd, "batch_no")} steamed and loaded into the dryer as ${b?.batch_no}`);
+}
+
+/** Start a steaming lot from any finished soaking tanks into a chosen free dryer. */
+export async function startSteamingLot(fd: FormData) {
+  const path = backPath(fd, "/production/steaming");
+  const tanks = fd.getAll("pick").map(String).filter(Boolean);
+  if (!tanks.length) back(path, { error: "Tick at least one finished soaking tank" });
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("start_steaming_lot", {
+    p_soaking: tanks,
+    p_dryer: str(fd, "dryer_id"),
+    p_started_at: istInput(str(fd, "started_at")),
+    p_request: optStr(fd, "request_id"),
+    p_remarks: optStr(fd, "remarks"),
+  });
+  if (error) back(path, { error });
+  const { data: b } = await supabase.from("production_batches").select("batch_no").eq("id", data).single();
+  done(path, `Lot ${b?.batch_no} steaming started`);
+}

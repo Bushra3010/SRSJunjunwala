@@ -53,6 +53,7 @@ export function errorMessage(err: { message?: string } | null | undefined) {
     INCOMPLETE_BATCH: "Not finished yet",
     EQUIPMENT_BUSY: "Equipment in use",
     STEAMER_BUSY: "Steamer in use",
+    DRYER_BUSY: "Dryer still full",
     WRONG_PAIR: "Wrong tank pair",
     WRONG_DRYER: "Wrong dryer",
     WRONG_EQUIPMENT: "Wrong equipment",

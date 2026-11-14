@@ -287,7 +287,7 @@ async function main() {
   });
   await as(users.qc_head, (tx) => tx.query("select public.post_qc_inbound($1)", [tq]));
   const qline = await one(db, "select * from public.qc_inbound_lines where qc_id = $1", [tq]);
-  await expectError("soaking operator cannot create a truck receipt", users.soaking_operator,
+  await expectError("milling operator cannot create a truck receipt", users.milling_operator,
     (tx) => tx.query("select public.create_receipt_batch($1)", [qline.id]), /PERMISSION_DENIED/);
   const reqR = randomUUID();
   const rcv = (await as(users.qc_head, (tx) => one(tx, "select public.create_receipt_batch($1, $2) as id", [qline.id, reqR]))).id;
@@ -337,20 +337,16 @@ async function main() {
   check("soaking duration recorded (12 h)", Number(S1.duration_minutes) === 720, S1.duration_minutes);
 
   // Scenario 4: pair steaming.
-  await expectError("steaming needs a full fixed pair", users.steaming_operator,
-    (tx) => tx.query("select public.start_production_batch('steaming', $1, $2::jsonb)", [eq.STEAMER, JSON.stringify([{ batch_id: s1 }])]), /WRONG_PAIR/);
   await expectError("drying operator cannot run the steamer", users.drying_operator,
     (tx) => tx.query("select public.start_production_batch('steaming', $1, $2::jsonb)", [eq.STEAMER, JSON.stringify([{ batch_id: s1 }, { batch_id: s2 }])]), /PERMISSION_DENIED/);
   const stm = await start("steaming_operator", "steaming", eq.STEAMER, [{ batch_id: s1 }, { batch_id: s2 }], { at: "2026-10-10 23:00+05:30" });
   const STM = await batch(stm);
-  check("S4 steaming combines Tank 1 + Tank 2 (7950 + 8100 kg)", STM.pair_no === 1 && Number(STM.input_kg) === 16050 && STM.batch_no.startsWith("STM-"), STM.input_kg);
+  check("S4 steaming lot combines Tank 1 + Tank 2 (7950 + 8100 kg)", STM.pair_no === 1 && Number(STM.input_kg) === 16050 && STM.batch_no.startsWith("LOT-"), STM.input_kg);
   await expectError("common steamer runs one batch at a time", users.steaming_operator,
     (tx) => tx.query("select public.start_production_batch('steaming', $1, $2::jsonb)", [eq.STEAMER, JSON.stringify([{ batch_id: s1 }, { batch_id: s2 }])]), /BUSY/);
   await as(users.steaming_operator, (tx) => tx.query("select public.complete_production_batch($1, null, 0, null, '2026-10-11 00:00+05:30')", [stm]));
 
   // Scenario 5: dryer 1 only.
-  await expectError("pair 1 cannot go to Dryer 2", users.drying_operator,
-    (tx) => tx.query("select public.start_production_batch('drying', $1, $2::jsonb)", [eq["DRYER-2"], JSON.stringify([{ batch_id: stm }])]), /WRONG_DRYER/);
   const dry = await start("drying_operator", "drying", eq["DRYER-1"], [{ batch_id: stm }], { at: "2026-10-11 00:15+05:30" });
   await as(users.drying_operator, (tx) => tx.query("select public.complete_production_batch($1, 14000, 0, 13.5, '2026-10-11 13:15+05:30')", [dry]));
   const DRY = await batch(dry);
@@ -459,6 +455,83 @@ async function main() {
     await tx.query("delete from public.batch_quantity_ledger");
   }, /append-only/);
   check("quantity ledger has entries for every movement", Number(ledger.n) > 30);
+
+
+  // ---- Client flow (14 Nov): truck straight into tanks, pair lot steams into its dryer ----
+  console.log("\nClient flow: trucks to tanks, pair lots, 3 feed tanks");
+  check("three mill feed tanks", !!eq["MFT-3"] || !!(await one(db, "select id from public.production_equipment where code = 'MFT-3'")));
+  const newTruck = async (rst, vehicle) => {
+    const tk = await as(users.weighbridge_operator, (tx) =>
+      one(tx, `insert into public.weighbridge_tickets (plant_id, rst, vehicle_no, direction, gross_kg, weighed_at)
+               values ($1, $2, $3, 'inbound', 28000, '2026-10-12 08:00+05:30') returning *`, [PLANT, rst, vehicle]));
+    await as(users.weighbridge_operator, (tx) => tx.query("select public.complete_weighing($1, null, 12000)", [tk.id]));
+    const qid = (await as(users.qc_unloading, (tx) => one(tx, "select public.start_qc_inbound($1) as id", [tk.id]))).id;
+    await as(users.qc_unloading, async (tx) => {
+      await tx.query("update public.qc_inbound set supplier_id = $2, location_id = $3 where id = $1", [qid, party["Kaveri Agro"], loc["YARD-A"]]);
+      await tx.query("insert into public.qc_inbound_lines (qc_id, line_no, variety_id, moisture_pct, sacks_received) values ($1, 1, $2, 14, 320)", [qid, ids.IR64]);
+      await tx.query("select public.submit_qc_inbound($1)", [qid]);
+    });
+    await as(users.qc_head, (tx) => tx.query("select public.post_qc_inbound($1)", [qid]));
+    return (await one(db, "select id from public.qc_inbound_lines where qc_id = $1", [qid])).id;
+  };
+  const line2 = await newTruck(301, "HR 55 AA 3010");
+  const waiting = await as(users.soaking_operator, (tx) => all(tx, "select qc_line_id from public.production_receivable_lines()"));
+  check("soaking operator sees trucks waiting for a tank", waiting.some((w) => w.qc_line_id === line2));
+  const soakFromTruck = (tank, lineId, kg, at, req = null) =>
+    as(users.soaking_operator, (tx) => one(tx, "select public.start_soaking_from_trucks($1, $2::jsonb, $3, $4) as id",
+      [eq[tank], JSON.stringify([{ qc_line_id: lineId, qty_kg: kg }]), at, req])).then((r) => r.id);
+  const reqT = randomUUID();
+  const t3 = await soakFromTruck("TANK-3", line2, 8000, "2026-10-12 09:00+05:30", reqT);
+  const t3retry = await soakFromTruck("TANK-3", line2, 8000, "2026-10-12 09:00+05:30", reqT);
+  const t4 = await soakFromTruck("TANK-4", line2, 8000, "2026-10-12 09:10+05:30");
+  const rcv2 = await one(db, "select b.id, b.batch_no, b.status from public.production_batches b where b.source_qc_line_id = $1", [line2]);
+  check("truck loaded straight into Tanks 3 and 4 (receipt created automatically, once)", !!rcv2 && rcv2.status === "consumed" && t3retry === t3
+    && Number((await one(db, "select count(*) as n from public.production_batches where source_qc_line_id = $1", [line2])).n) === 1);
+  await as(users.soaking_operator, (tx) => tx.query("select public.complete_production_batch($1, null, 0, null, '2026-10-12 21:00+05:30')", [t3]));
+  await as(users.soaking_operator, (tx) => tx.query("select public.complete_production_batch($1, null, 0, null, '2026-10-12 21:10+05:30')", [t4]));
+  const lot = await start("steaming_operator", "steaming", eq.STEAMER, [{ batch_id: t3 }, { batch_id: t4 }], { at: "2026-10-12 21:30+05:30" });
+  const LOT = await batch(lot);
+  check("tank pair 3+4 becomes one LOT", /^LOT-\d{4}-\d{5}$/.test(LOT.batch_no) && LOT.pair_no === 2, LOT.batch_no);
+  const d2 = (await as(users.steaming_operator, (tx) => one(tx, "select public.finish_steaming_to_dryer($1, '2026-10-12 23:30+05:30') as id", [lot]))).id;
+  const d2retry = (await as(users.steaming_operator, (tx) => one(tx, "select public.finish_steaming_to_dryer($1) as id", [lot]))).id;
+  const D2 = await batch(d2);
+  check("finishing steaming loads Dryer 2 in the same step (safe to retry)", D2.stage === "drying" && D2.equipment_id === eq["DRYER-2"] && D2.status === "running" && d2retry === d2 && (await batch(lot)).status === "consumed");
+  const line3 = await newTruck(302, "HR 55 AA 3020");
+  const t3b = await soakFromTruck("TANK-3", line3, 8000, "2026-10-13 09:00+05:30");
+  const t4b = await soakFromTruck("TANK-4", line3, 8000, "2026-10-13 09:10+05:30");
+  await as(users.soaking_operator, (tx) => tx.query("select public.complete_production_batch($1, null, 0, null, '2026-10-13 21:00+05:30')", [t3b]));
+  await as(users.soaking_operator, (tx) => tx.query("select public.complete_production_batch($1, null, 0, null, '2026-10-13 21:10+05:30')", [t4b]));
+  await expectError("next lot cannot steam into a dryer that is still full", users.steaming_operator,
+    (tx) => tx.query("select public.start_steaming_lot($1::uuid[], $2)", [[t3b, t4b], eq["DRYER-2"]]), /DRYER_BUSY/);
+  const anc2 = await as(users.management, (tx) => all(tx, "select distinct b.stage, b.batch_no from public.trace_ancestors($1) a join public.production_batches b on b.id = a.batch_id", [d2]));
+  check("dryer batch still traces to its truck without pre-cleaning", anc2.some((a) => a.batch_no === rcv2.batch_no) && !anc2.some((a) => a.stage === "precleaning") && anc2.filter((a) => a.stage === "soaking").length === 2);
+
+
+  // Rounding leftovers (< 1 kg) count as used up.
+  const line4 = await newTruck(303, "HR 55 AA 3030");
+  const t5 = await as(users.soaking_operator, (tx) => one(tx, "select public.start_soaking_from_trucks($1, $2::jsonb, '2026-10-14 09:00+05:30') as id",
+    [eq["TANK-5"], JSON.stringify([{ qc_line_id: line4, qty_kg: 15999.85 }])])).then((r) => r.id);
+  const r4 = await one(db, "select status from public.production_batches where source_qc_line_id = $1", [line4]);
+  check("a truck with only grams left counts as fully loaded", r4.status === "consumed" && !!t5, r4.status);
+
+
+  // Flexible dryers (client, 14 Nov): any tanks, any free dryer.
+  await as(users.soaking_operator, (tx) => tx.query("select public.complete_production_batch($1, null, 0, null, '2026-10-14 21:00+05:30')", [t5]));
+  const lone = (await as(users.steaming_operator, (tx) => one(tx, "select public.start_steaming_lot($1::uuid[], $2, '2026-10-14 21:30+05:30') as id", [[t5], eq["DRYER-1"]]))).id;
+  const LONE = await batch(lone);
+  check("a single tank (Tank 5) can be steamed as its own lot", LONE.batch_no.startsWith("LOT-") && LONE.pair_no === null && LONE.target_dryer_id === eq["DRYER-1"]);
+  await expectError("a dryer promised to a steaming lot can't be given to another", users.steaming_operator,
+    (tx) => tx.query("select public.start_steaming_lot($1::uuid[], $2)", [[t3b, t4b], eq["DRYER-1"]]), /DRYER_BUSY|BUSY/);
+  const d1 = (await as(users.steaming_operator, (tx) => one(tx, "select public.finish_steaming_to_dryer($1, '2026-10-14 22:30+05:30') as id", [lone]))).id;
+  check("Tank 5 lot goes into Dryer 1 (no fixed pairing)", (await batch(d1)).equipment_id === eq["DRYER-1"]);
+  const mixLot = (await as(users.steaming_operator, (tx) => one(tx, "select public.start_steaming_lot($1::uuid[], $2, '2026-10-14 22:45+05:30') as id", [[t3b, t4b], eq["DRYER-3"]]))).id;
+  check("Tanks 3 + 4 can go to Dryer 3 when Dryer 2 is full", (await batch(mixLot)).target_dryer_id === eq["DRYER-3"]);
+  const dryerNames = await all(db, "select name from public.production_equipment where kind = 'dryer' order by number");
+  check("dryers are named without fixed tanks", dryerNames.map((d) => d.name).join() === "Dryer 1,Dryer 2,Dryer 3");
+  await db.query("update public.varieties set std_tank_kg = 16500 where code = 'IR64'");
+  const line5 = await newTruck(304, "HR 55 AA 3040");
+  const std = await as(users.soaking_operator, (tx) => one(tx, "select std_tank_kg from public.production_receivable_lines() where qc_line_id = $1", [line5]));
+  check("standard weight per tank comes with the waiting truck", Number(std.std_tank_kg) === 16500);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

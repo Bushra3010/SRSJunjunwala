@@ -137,8 +137,13 @@ export async function updateVariety(fd: FormData) {
   const bag = optNum(fd, "default_bag_weight_kg");
   const yieldPct = optNum(fd, "est_yield_pct");
   if (bag === null || yieldPct === null || Number.isNaN(bag) || Number.isNaN(yieldPct)) back(path, { error: "Enter bag weight and yield" });
+  const stdQ = optNum(fd, "std_tank_q");
+  if (Number.isNaN(stdQ) || (stdQ !== null && stdQ <= 0)) back(path, { error: "Standard tank weight must be a positive number of quintals" });
   const supabase = await createClient();
-  const { error } = await supabase.from("varieties").update({ default_bag_weight_kg: bag, est_yield_pct: yieldPct }).eq("id", str(fd, "id"));
+  const { error } = await supabase
+    .from("varieties")
+    .update({ default_bag_weight_kg: bag, est_yield_pct: yieldPct, std_tank_kg: stdQ === null ? null : Math.round(stdQ * 100 * 100) / 100 })
+    .eq("id", str(fd, "id"));
   if (error) back(path, { error });
   revalidatePath("/admin");
   back(path, { notice: "Variety updated" });

@@ -7,9 +7,12 @@ import {
   CancelForm,
   CompleteForm,
   EquipmentTile,
+  FinishSteamingForm,
   ProductionNav,
   Qty,
+  SoakingStartForm,
   StartForm,
+  type WaitingTruck,
 } from "@/components/production";
 import { requireModule } from "@/lib/auth";
 import { PRODUCTION_APPROVERS, STAGE_OPERATORS } from "@/lib/roles";
@@ -27,7 +30,7 @@ import {
   type Stage,
   type StageSP,
 } from "@/lib/production";
-import { millingStep, startBatch } from "@/app/(app)/production/actions";
+import { millingStep, startBatch, startSteamingLot } from "@/app/(app)/production/actions";
 
 type Kind = Equipment["kind"];
 
@@ -45,7 +48,7 @@ const CONFIG: Record<
   soaking: {
     kinds: ["soaking_tank"],
     tab: "soaking",
-    description: "Six tanks, 12 hours, 150–180 q per tank. A truck may be split across tanks; each tank keeps its own batch ID and history.",
+    description: "Trucks go from the unloading bay straight into a tank. Six tanks, 12 hours, 150–180 q per tank. A truck may be split across tanks; each tank keeps its own batch ID and history.",
     needsOutput: false,
     mode: "generic",
     note: "Soaked paddy absorbs water. Weigh it if you can; otherwise leave output blank and it is carried forward as an estimate.",
@@ -53,14 +56,14 @@ const CONFIG: Record<
   steaming: {
     kinds: ["steamer"],
     tab: "steaming",
-    description: "One common steaming tank. Fixed pairs only: Tank 1 + 2, Tank 3 + 4, Tank 5 + 6. One pair at a time.",
+    description: "A lot is one or more finished tanks, usually a pair. The lot steams continuously, one tank after the other, and passes straight into the dryer you choose. One lot at a time.",
     needsOutput: false,
     mode: "steaming",
   },
   drying: {
     kinds: ["dryer"],
     tab: "drying",
-    description: "Three dryers, 12–14 hours, 270–340 q each. Dryer 1 takes pair 1+2, Dryer 2 pair 3+4, Dryer 3 pair 5+6.",
+    description: "Three dryers, 12–14 hours, 270–340 q each. Any steaming lot can go into any free dryer.",
     needsOutput: true,
     moisture: true,
     mode: "drying",
@@ -90,10 +93,12 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
   const canManage = PRODUCTION_APPROVERS.includes(profile.role);
   const m = await loadMasters();
   const equipment = m.equipment.filter((e) => cfg.kinds.includes(e.kind));
-  const [history, state, ready] = await Promise.all([
+  const [history, state, ready, trucks] = await Promise.all([
     stageHistory(stage, sp),
     equipmentState(equipment.map((e) => e.id)),
-    readyBatches(meta.parent!),
+    // Soaking takes trucks directly: receipts already in production with paddy left, plus posted QC trucks.
+    readyBatches(stage === "soaking" ? "receipt" : meta.parent!),
+    stage === "soaking" ? m.supabase.rpc("production_receivable_lines") : Promise.resolve({ data: [] }),
   ]);
   const running = history.batches.filter((b) => b.status === "running");
   const back = meta.href;
@@ -116,6 +121,25 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
   }
   const steamer = equipment[0];
   const steamerBusy = steamer ? state.get(steamer.id) : undefined;
+  // Any lot may go into any free dryer. A dryer is unavailable while it holds paddy or is
+  // promised to a lot that is steaming right now.
+  const dryerStatus: { id: string; name: string; usual: string; busy?: string }[] = [];
+  if (cfg.mode === "steaming" || cfg.mode === "drying") {
+    const dryers = m.equipment.filter((e) => e.kind === "dryer");
+    const ds = await equipmentState(dryers.map((d) => d.id));
+    const { data: promised } = await m.supabase
+      .from("production_batches")
+      .select("batch_no, target_dryer_id")
+      .eq("stage", "steaming")
+      .eq("status", "running")
+      .not("target_dryer_id", "is", null);
+    for (const d of dryers) {
+      const hold = ds.get(d.id)?.batch.batch_no ?? (promised ?? []).find((x) => x.target_dryer_id === d.id)?.batch_no;
+      dryerStatus.push({ id: d.id, name: d.name, usual: d.pair_no ? `usually Tanks ${d.pair_no * 2 - 1} + ${d.pair_no * 2}` : "", busy: hold });
+    }
+  }
+  const freeDryers = dryerStatus.filter((d) => !d.busy);
+  const dryerName = (id: string | null | undefined) => dryerStatus.find((d) => d.id === id)?.name;
 
   // Milling: step progress for running batches.
   const steps = new Map<string, { step: string; started_at: string | null; ended_at: string | null }[]>();
@@ -144,9 +168,7 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
               batch={s?.batch}
               available={s?.available}
               sub={
-                e.kind === "soaking_tank"
-                  ? `Pair ${e.pair_no} · steams with Tank ${e.number! % 2 ? e.number! + 1 : e.number! - 1}`
-                  : e.capacity_max_kg
+                e.capacity_max_kg
                     ? `${q(e.capacity_min_kg, 0)}–${q(e.capacity_max_kg, 0)} · ${e.expected_hours_min}${e.expected_hours_max !== e.expected_hours_min ? `–${e.expected_hours_max}` : ""} h`
                     : undefined
               }
@@ -157,80 +179,114 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
 
       <div className="mb-6 grid gap-6 xl:grid-cols-2">
         {canOperate && (
-          <Card tone={meta.color} title={cfg.mode === "steaming" ? "Start steaming a tank pair" : cfg.mode === "drying" ? "Load a dryer" : `Start ${meta.label.toLowerCase()}`}>
+          <Card tone={meta.color} title={cfg.mode === "steaming" ? "Start steaming a lot" : cfg.mode === "drying" ? "Load a dryer" : stage === "soaking" ? "Load a tank from trucks" : `Start ${meta.label.toLowerCase()}`}>
             {cfg.note && (
               <div className="px-4 pt-4">
                 <Note>{cfg.note}</Note>
               </div>
             )}
             {cfg.mode === "steaming" ? (
-              <div className="grid gap-3 p-4 sm:grid-cols-3">
-                {[1, 2, 3].map((pair) => {
-                  const a = soakingByTank.get(pair * 2 - 1);
-                  const b = soakingByTank.get(pair * 2);
-                  const ready = a?.batch.status === "completed" && b?.batch.status === "completed";
-                  return (
-                    <form key={pair} action={startBatch} className="flex flex-col gap-2 rounded-md border border-line p-3">
-                      <input type="hidden" name="stage" value="steaming" />
-                      <input type="hidden" name="back" value={back} />
-                      <input type="hidden" name="request_id" value={randomUUID()} />
-                      <input type="hidden" name="equipment_id" value={steamer?.id} />
-                      <div className="text-[14px] font-bold text-ink">
-                        Tank {pair * 2 - 1} + Tank {pair * 2}
-                      </div>
-                      {[a, b].map((t, i) => (
-                        <div key={i} className="text-[12px]">
-                          <span className="text-muted">Tank {pair * 2 - 1 + i}: </span>
-                          {t ? (
-                            <>
-                              <BatchLink no={t.batch.batch_no} /> <span className="text-muted">{t.batch.status === "running" ? "soaking" : `ready · ${q(t.available)}`}</span>
-                              {t.batch.status === "completed" && <input type="hidden" name="pick" value={t.batch.id} />}
-                            </>
-                          ) : (
-                            <span className="text-muted">empty</span>
-                          )}
-                        </div>
+              <form action={startSteamingLot} className="space-y-4 p-4">
+                <input type="hidden" name="back" value={back} />
+                <input type="hidden" name="request_id" value={randomUUID()} />
+                <p className="text-[13px] text-muted">
+                  Pick the finished tanks for this lot and the dryer it goes into. Usually Tank 1 + 2 go to Dryer 1, 3 + 4 to Dryer 2 and 5 + 6 to Dryer 3, but any tank can go to any free dryer.
+                </p>
+                <fieldset>
+                  <legend className="label">Soaking tanks in this lot</legend>
+                  <ul className="grid gap-2 sm:grid-cols-3">
+                    {m.equipment
+                      .filter((e) => e.kind === "soaking_tank")
+                      .map((t) => {
+                        const st = soakingByTank.get(t.number!);
+                        const ready = st?.batch.status === "completed";
+                        return (
+                          <li key={t.id}>
+                            <label className={`flex items-start gap-2 rounded-md border p-2.5 ${ready ? "border-line bg-white" : "border-dashed border-line opacity-60"}`}>
+                              <input type="checkbox" name="pick" value={st?.batch.id ?? ""} disabled={!ready} className="mt-0.5 size-4 accent-[#1f6b32]" />
+                              <span className="min-w-0 text-[12px]">
+                                <span className="block text-[13px] font-bold text-ink">{t.name.replace("Soaking ", "")}</span>
+                                {st ? (
+                                  <span className="text-muted">
+                                    {st.batch.batch_no} · {st.batch.status === "running" ? "still soaking" : `ready · ${q(st.available)}`}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted">empty</span>
+                                )}
+                              </span>
+                            </label>
+                          </li>
+                        );
+                      })}
+                  </ul>
+                </fieldset>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="label" htmlFor="lot-dryer">Goes into dryer</label>
+                    <select id="lot-dryer" name="dryer_id" className="input" required defaultValue="">
+                      <option value="" disabled>
+                        {freeDryers.length ? "Select a free dryer…" : "All dryers are full"}
+                      </option>
+                      {dryerStatus.map((d) => (
+                        <option key={d.id} value={d.id} disabled={!!d.busy}>
+                          {d.name}
+                          {d.busy ? ` — full (${d.busy})` : ` — free${d.usual ? `, ${d.usual}` : ""}`}
+                        </option>
                       ))}
-                      <input type="datetime-local" name="started_at" className="input" aria-label="Start time (blank = now)" />
-                      <button className="btn-primary" disabled={!ready || !!steamerBusy}>
-                        {steamerBusy ? "Steamer in use" : ready ? `Start pair ${pair}` : "Waiting for both tanks"}
-                      </button>
-                    </form>
-                  );
-                })}
-              </div>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="lot-start">Steaming start (blank = now)</label>
+                    <input id="lot-start" type="datetime-local" name="started_at" className="input" />
+                  </div>
+                </div>
+                <button className="btn-primary" disabled={!!steamerBusy || freeDryers.length === 0}>
+                  {steamerBusy ? "Steamer in use" : "Start steaming lot"}
+                </button>
+              </form>
             ) : cfg.mode === "drying" ? (
               ready.length === 0 ? (
                 <Empty>No steamed batch is waiting for a dryer.</Empty>
               ) : (
                 <ul className="divide-y divide-line">
-                  {ready.map(({ batch: b, available }) => {
-                    const dryer = equipment.find((e) => e.pair_no === b.pair_no);
-                    const busy = dryer ? state.get(dryer.id) : undefined;
-                    return (
-                      <li key={b.id}>
-                        <form action={startBatch} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                          <input type="hidden" name="stage" value="drying" />
-                          <input type="hidden" name="back" value={back} />
-                          <input type="hidden" name="request_id" value={randomUUID()} />
-                          <input type="hidden" name="pick" value={b.id} />
-                          <input type="hidden" name="equipment_id" value={dryer?.id} />
-                          <div className="min-w-0 flex-1">
-                            <BatchLink no={b.batch_no} />
-                            <div className="text-[12px] text-muted">
-                              Pair {b.pair_no} (Tanks {b.pair_no! * 2 - 1} & {b.pair_no! * 2}) · {q(available)}
-                            </div>
-                          </div>
-                          <input type="datetime-local" name="started_at" className="input w-auto" aria-label="Start time (blank = now)" />
-                          <button className="btn-primary" disabled={!!busy}>
-                            {busy ? `${dryer?.name.split(" (")[0]} busy` : `Load ${dryer?.name.split(" (")[0]}`}
-                          </button>
-                        </form>
-                      </li>
-                    );
-                  })}
+                  {ready.map(({ batch: b, available }) => (
+                    <li key={b.id}>
+                      <form action={startBatch} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                        <input type="hidden" name="stage" value="drying" />
+                        <input type="hidden" name="back" value={back} />
+                        <input type="hidden" name="request_id" value={randomUUID()} />
+                        <input type="hidden" name="pick" value={b.id} />
+                        <div className="min-w-0 flex-1">
+                          <BatchLink no={b.batch_no} />
+                          <div className="text-[12px] text-muted">{q(available)} steamed</div>
+                        </div>
+                        <select name="equipment_id" className="input w-auto" required defaultValue={freeDryers.find((d) => d.id === b.target_dryer_id)?.id ?? ""} aria-label="Dryer">
+                          <option value="" disabled>
+                            Dryer…
+                          </option>
+                          {freeDryers.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.name}
+                            </option>
+                          ))}
+                        </select>
+                        <input type="datetime-local" name="started_at" className="input w-auto" aria-label="Start time (blank = now)" />
+                        <button className="btn-primary" disabled={freeDryers.length === 0}>
+                          Load dryer
+                        </button>
+                      </form>
+                    </li>
+                  ))}
                 </ul>
               )
+            ) : stage === "soaking" ? (
+              <SoakingStartForm
+                tanks={equipment.filter((e) => !state.get(e.id))}
+                trucks={(trucks.data ?? []) as WaitingTruck[]}
+                receipts={ready.map((c) => ({ ...c, label: parentLabel(c.batch) }))}
+                back={back}
+                canAuthorize={canManage}
+              />
             ) : (
               <StartForm
                 stage={stage}
@@ -256,7 +312,8 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
                       <div>
                         <BatchLink no={b.batch_no} />{" "}
                         <span className="text-[12px] text-muted">
-                          {b.equipment_id ? m.equipmentById.get(b.equipment_id)?.name : ""} · started {dateTime(b.started_at)} · by {m.userName(b.operator_id)}
+                          {b.equipment_id ? m.equipmentById.get(b.equipment_id)?.name : ""}
+                          {b.target_dryer_id ? ` → ${dryerName(b.target_dryer_id) ?? "dryer"}` : ""} · started {dateTime(b.started_at)} · by {m.userName(b.operator_id)}
                         </span>
                       </div>
                       <Qty kg={b.input_kg} />
@@ -290,7 +347,11 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
                     )}
                     {canOperate && (
                       <div className="flex flex-wrap items-start gap-2">
-                        <CompleteForm batch={b} back={back} needsOutput={cfg.needsOutput} moisture={cfg.moisture} />
+                        {stage === "steaming" ? (
+                          <FinishSteamingForm batch={b} back={back} dryer={dryerName(b.target_dryer_id) ?? "the dryer"} />
+                        ) : (
+                          <CompleteForm batch={b} back={back} needsOutput={cfg.needsOutput} moisture={cfg.moisture} />
+                        )}
                         {canManage && <CancelForm batch={b} back={back} />}
                       </div>
                     )}

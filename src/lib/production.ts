@@ -10,8 +10,8 @@ export const STAGES: Stage[] = ["receipt", "precleaning", "soaking", "steaming",
 export const STAGE_META: Record<Stage, { label: string; local?: string; prefix: string; href: string; color: string; parent?: Stage }> = {
   receipt: { label: "Truck receipt", local: "Houdi", prefix: "RCV", href: "/production/receipts", color: "#4b5563" },
   precleaning: { label: "Pre-cleaning", prefix: "PC", href: "/production/precleaning", color: "#6f7d1e", parent: "receipt" },
-  soaking: { label: "Soaking", local: "Kachi", prefix: "SOAK", href: "/production/soaking", color: "#1f7f86", parent: "precleaning" },
-  steaming: { label: "Steaming", local: "Pakki", prefix: "STM", href: "/production/steaming", color: "#b5532f", parent: "soaking" },
+  soaking: { label: "Soaking", local: "Kachi", prefix: "SOAK", href: "/production/soaking", color: "#1f7f86", parent: "receipt" },
+  steaming: { label: "Steaming lot", local: "Pakki", prefix: "LOT", href: "/production/steaming", color: "#b5532f", parent: "soaking" },
   drying: { label: "Drying", prefix: "DRY", href: "/production/drying", color: "#c08a24", parent: "steaming" },
   mill_feed: { label: "Mill feed", prefix: "MFD", href: "/production/mill-feed", color: "#7b4f8e", parent: "drying" },
   milling: { label: "Milling", prefix: "MIL", href: "/production/milling", color: "#3e6fc0", parent: "mill_feed" },
@@ -45,6 +45,7 @@ export type Batch = {
   confirmed_at: string | null;
   source_snapshot: Record<string, string | number | null> | null;
   stock_location_id: string | null;
+  target_dryer_id: string | null;
   authorization_reason: string | null;
   cancel_reason: string | null;
   cancelled_at: string | null;
@@ -79,7 +80,7 @@ export type TimelineEvent = {
 };
 
 export const BATCH_COLUMNS =
-  "id, batch_no, stage, status, equipment_id, pair_no, variety_id, grade_id, input_kg, output_kg, rejected_kg, loss_kg, output_qty_status, moisture_pct, quality_status, started_at, ended_at, duration_minutes, operator_id, completed_by, approved_at, confirmed_at, source_snapshot, stock_location_id, authorization_reason, cancel_reason, cancelled_at, remarks, created_at";
+  "id, batch_no, stage, status, equipment_id, pair_no, variety_id, grade_id, input_kg, output_kg, rejected_kg, loss_kg, output_qty_status, moisture_pct, quality_status, started_at, ended_at, duration_minutes, operator_id, completed_by, approved_at, confirmed_at, source_snapshot, stock_location_id, target_dryer_id, authorization_reason, cancel_reason, cancelled_at, remarks, created_at";
 
 /** Quintals, the unit the plant floor talks in (1 q = 100 kg). */
 export function q(kg: number | string | null | undefined, digits = 2) {
@@ -102,6 +103,7 @@ export function eventLabel(type: string) {
     completed: "Completed",
     transferred_out: "Material transferred out",
     fully_consumed: "Fully moved to next stage",
+    dryer_assigned: "Dryer chosen for this lot",
     material_released: "Material released back",
     material_returned: "Material returned (child cancelled)",
     output_recorded: "Final output recorded",
@@ -135,7 +137,7 @@ export async function loadMasters() {
   const [eq, grades, varieties, profiles] = await Promise.all([
     supabase.from("production_equipment").select("*").eq("active", true).order("kind").order("number"),
     supabase.from("rice_grades").select("id, code, name, reference_pct, sort_order").eq("active", true).order("sort_order"),
-    supabase.from("varieties").select("id, code, name"),
+    supabase.from("varieties").select("id, code, name, std_tank_kg"),
     supabase.from("profiles").select("id, full_name, email"),
   ]);
   const equipment = (eq.data ?? []) as Equipment[];
@@ -224,7 +226,7 @@ export async function readyBatches(stage: Stage) {
     .limit(200);
   const rows = (data ?? []) as Batch[];
   const avail = await availability(rows.map((r) => r.id));
-  return rows.map((b) => ({ batch: b, available: avail.get(b.id) ?? 0 })).filter((c) => c.available > 0);
+  return rows.map((b) => ({ batch: b, available: avail.get(b.id) ?? 0 })).filter((c) => c.available >= 1);
 }
 
 /** Running / holding batch per piece of equipment, plus its available quantity. */
@@ -242,7 +244,7 @@ export async function equipmentState(equipmentIds: string[]) {
   const out = new Map<string, { batch: Batch; available: number }>();
   for (const b of rows) {
     const a = avail.get(b.id) ?? 0;
-    if (b.status === "completed" && a <= 0) continue;
+    if (b.status === "completed" && a < 1) continue;
     if (!out.has(b.equipment_id!)) out.set(b.equipment_id!, { batch: b, available: a });
   }
   return out;

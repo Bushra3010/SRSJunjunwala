@@ -68,11 +68,11 @@ export default async function ProductionOverview({ searchParams }: { searchParam
       <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
         <Card tone={C.green} title="Plant floor">
           <div className="space-y-1 p-4">
-            {row("Pre-cleaning", "/production/precleaning", by("precleaner").map((e) => tile(e)), "sm:grid-cols-2")}
+            {row("Trucks from the unloading bay", "/production/receipts", <p className="text-[13px] text-muted sm:col-span-2">Unloaded trucks go straight into a soaking tank.</p>, "sm:grid-cols-2")}
             {arrow}
-            {row("Soaking (kachi) · 12 h", "/production/soaking", by("soaking_tank").map((e) => tile(e, `Pair ${e.pair_no}`)))}
+            {row("Soaking (kachi) · 12 h", "/production/soaking", by("soaking_tank").map((e) => tile(e)))}
             {arrow}
-            {row("Steaming (pakki) · one pair at a time", "/production/steaming", by("steamer").map((e) => tile(e)), "sm:grid-cols-2")}
+            {row("Steaming (pakki) · one lot at a time, straight into the chosen dryer", "/production/steaming", by("steamer").map((e) => tile(e)), "sm:grid-cols-2")}
             {arrow}
             {row("Drying · 12–14 h", "/production/drying", by("dryer").map((e) => tile(e)))}
             {arrow}
