@@ -224,7 +224,7 @@ export async function startSoaking(fd: FormData) {
   done(path, `${b?.batch_no} soaking started`);
 }
 
-/** Steaming done: the lot goes straight into its fixed dryer. */
+/** Steaming done: the lot goes straight into the dryer chosen when it started. */
 export async function finishSteaming(fd: FormData) {
   const path = backPath(fd, "/production/steaming");
   const supabase = await createClient();

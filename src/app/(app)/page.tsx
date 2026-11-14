@@ -38,7 +38,13 @@ export default async function OverviewPage({ searchParams }: { searchParams: Pro
         <WelcomeBanner initials={initials} title={`Welcome back, ${firstName}`}>
           Your modules are in the menu.
         </WelcomeBanner>
-        <Note>Processing and Stores & Repairs dashboards arrive in Phase 3.</Note>
+        {canAccess(role, "processing") ? (
+          <Link href="/production" className="btn-primary">
+            Open the production floor
+          </Link>
+        ) : (
+          <Note>Stores &amp; Repairs arrives in Phase 3.</Note>
+        )}
       </>
     );
   }

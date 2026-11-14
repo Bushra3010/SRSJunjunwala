@@ -62,7 +62,13 @@ export default async function BatchPage({ params, searchParams }: { params: Prom
               <StatusBadge status={b.status} />
             </Field>
             <Field label="Equipment">{eq?.name ?? "—"}</Field>
-            {b.pair_no && <Field label="Tank pair">{`Tanks ${b.pair_no * 2 - 1} & ${b.pair_no * 2} → Dryer ${b.pair_no}`}</Field>}
+            {b.stage === "steaming" && (
+              <Field label="Lot">
+                {`${(inputs.data ?? []).map((i) => m.equipmentById.get((i.parent as unknown as Rel).equipment_id ?? "")?.name.replace("Soaking ", "")).filter(Boolean).join(" + ") || "—"} → ${
+                  b.target_dryer_id ? (m.equipmentById.get(b.target_dryer_id)?.name ?? "dryer") : "dryer not chosen"
+                }`}
+              </Field>
+            )}
             <Field label="Variety">{b.variety_id ? m.varietyById.get(b.variety_id)?.name : "Mixed / not set"}</Field>
             {b.grade_id && <Field label="Grade">{m.gradeById.get(b.grade_id)?.name}</Field>}
             <Field label="Input">

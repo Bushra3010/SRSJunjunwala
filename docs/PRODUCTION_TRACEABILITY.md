@@ -2,6 +2,17 @@
 
 Module of the SRS Overseas ERP (Next.js 15 + Supabase). Tracks every batch from truck receipt to final rice grade, with permanent IDs, parent→child quantities, timestamps, users, and forward/backward tracing.
 
+## 0. Current flow (after client feedback, 14 Nov 2026)
+
+The client reviewed the module and asked for these changes; they are live:
+
+1. **No pre-cleaning record.** Unloaded trucks go straight into a soaking tank (Production → Soaking tanks → *Load a tank from trucks*). The truck's receipt ID (`RCV-`) is created automatically at that moment. Older pre-cleaning batches stay valid and traceable.
+2. **Tanks are not weighed.** Each variety has a standard paddy weight per tank (Admin → Masters → Varieties, in quintals). Loading a tank defaults to that weight. Recovery is worked out from it.
+3. **Steaming lots.** A lot (`LOT-2026-00001`) is one or more finished soaking tanks, usually a pair, steamed continuously one tank after another. The operator picks the dryer when steaming starts; **any free dryer** can take any lot (e.g. Tank 5 into Dryer 1 when a tank is faulty). *Steaming done → load dryer* closes the lot and starts drying in one step.
+4. **Three mill feed tanks** (MFT-1 to MFT-3).
+
+Sections below describe the full design; where they mention pre-cleaning, fixed pairs or `STM-` IDs, this section takes precedence.
+
 ## 1. Audit of the existing ERP (what was reused)
 
 | Existing piece | How the module uses it |
@@ -23,6 +34,9 @@ Migrations (non-destructive, additive only):
 - `supabase/migrations/20261114000008_production_roles.sql` — adds roles `production_manager`, `soaking_operator`, `steaming_operator`, `drying_operator`, `milling_operator`.
 - `supabase/migrations/20261114000009_production_traceability.sql` — everything below.
 - `supabase/migrations/20261114000010_receipt_time_fix.sql` — receipt start time is capped at the QC posting time (a ticket weighed "after" its QC posting no longer fails).
+- `supabase/migrations/20261114000011_client_flow_changes.sql` — client feedback: trucks go straight into soaking tanks (no pre-cleaning record, receipt created automatically), steaming lots (`LOT-` IDs), 3 mill feed tanks.
+- `supabase/migrations/20261114000012_rounding_leftovers.sql` — less than 1 kg left counts as fully used, so tanks and dryers free up.
+- `supabase/migrations/20261114000013_flexible_dryers_std_weight.sql` — any finished tanks may form a lot and go into any free dryer (chosen at steaming start, `target_dryer_id`); standard paddy weight per tank for each variety (`varieties.std_tank_kg`).
 - `supabase/seed.sql` — now also seeds the factory equipment for new databases.
 
 ### Design choice
@@ -70,25 +84,25 @@ erDiagram
 Material flow (each arrow is a `batch_inputs` edge with a quantity):
 
 ```
-RCV (truck) ─► PC (pre-clean) ─┬─► SOAK Tank 1 ─┐
-                               └─► SOAK Tank 2 ─┴─► STM pair 1 ─► DRY Dryer 1 ─┬─► MFD tank 1 ─┐
+RCV (truck) ─┬─► SOAK Tank 1 ─┐
+             └─► SOAK Tank 2 ─┴─► LOT (steaming) ─► DRY any free dryer ─┬─► MFD tank 1 ─┐
                                                                                └─► MFD tank 2 ─┴─► MIL ─┬─► OUT 1st Wand
                                                                                                          ├─► OUT 2nd Wand … (7 grades)
 ```
 
 ### IDs
 
-`RCV-YYYY-00001`, `PC-`, `SOAK-`, `STM-`, `DRY-`, `MFD-`, `MIL-`, `OUT-` generated only in the database by `next_batch_no(stage)`: `INSERT … ON CONFLICT DO UPDATE … RETURNING` on `batch_counters` takes a row lock, so concurrent requests serialise and get distinct numbers. A rolled-back transaction also rolls back its counter, so committed IDs have no gaps; cancelled batches keep their ID; IDs are never edited (direct updates are blocked). The year is the IST year.
+`RCV-YYYY-00001`, `SOAK-`, `LOT-` (steaming lot; `STM-` before 14 Nov), `PC-` (pre-cleaning, no longer used), `DRY-`, `MFD-`, `MIL-`, `OUT-` generated only in the database by `next_batch_no(stage)`: `INSERT … ON CONFLICT DO UPDATE … RETURNING` on `batch_counters` takes a row lock, so concurrent requests serialise and get distinct numbers. A rolled-back transaction also rolls back its counter, so committed IDs have no gaps; cancelled batches keep their ID; IDs are never edited (direct updates are blocked). The year is the IST year.
 
 ## 3. Business rules (enforced in the database)
 
 | Rule | Where |
 |---|---|
-| Soaking needs a pre-cleaning batch; each stage only takes its previous stage | `start_production_batch` → `WRONG_SOURCE` |
+| Soaking takes trucks (receipts) directly; each other stage only takes its previous stage | `start_production_batch` → `WRONG_SOURCE` |
 | A tank / steamer / dryer that still holds material cannot be loaded | `EQUIPMENT_BUSY` (row lock on the equipment) |
 | Only one steaming run at a time | check + partial unique index `production_one_running_steam` |
-| Steaming takes exactly Tank 1+2, 3+4 or 5+6, both **completed** | `WRONG_PAIR`, `INCOMPLETE_BATCH` |
-| Pair n → Dryer n only | `WRONG_DRYER` |
+| A steaming lot takes one or more **completed** soaking tanks | `INCOMPLETE_BATCH` |
+| A lot goes into the dryer chosen at steaming start; a dryer that holds paddy or is promised to a steaming lot cannot be chosen | `start_steaming_lot` → `DRYER_BUSY` |
 | Incomplete batches cannot move forward; outputs need completed milling | `INCOMPLETE_BATCH` |
 | No duplicate consumption; truck received once | `DUPLICATE_CONSUMPTION`, unique `source_qc_line_id`, unique `(child, parent)` |
 | Allocation ≤ available unless a production manager authorises with a reason | `OVER_ALLOCATION` |
@@ -108,8 +122,8 @@ RCV (truck) ─► PC (pre-clean) ─┬─► SOAK Tank 1 ─┐
 |---|---|
 | Admin | Everything |
 | Production manager | All stages, approvals, physical confirmation into stock, corrections, cancellations, authorisations, fault resolution |
-| Soaking operator | Pre-cleaning and soaking |
-| Steaming operator | Steaming |
+| Soaking operator | Loading trucks into soaking tanks (creates the receipt) and soaking |
+| Steaming operator | Steaming lots, and loading the lot into its dryer |
 | Drying operator | Drying and mill-feed transfers |
 | Milling operator | Milling, milling steps, recording outputs |
 | Foreman (existing) | Pre-cleaning, soaking, steaming, drying, mill feed (boiler-side stages) |
@@ -139,9 +153,9 @@ Database functions (Supabase RPC): `create_receipt_batch`, `start_production_bat
 |---|---|---|
 | 1 | Production overview (plant floor in process order, attention list, today by grade, latest activity) | `/production` |
 | 2 | Truck receipt & production entry | `/production/receipts` |
-| 3 | Pre-cleaning | `/production/precleaning` |
+| 3 | Trucks (unloaded trucks waiting for a tank, trucks in production) | `/production/receipts` |
 | 4 | Six-tank soaking board | `/production/soaking` |
-| 5 | Common steaming (pair cards) | `/production/steaming` |
+| 5 | Steaming lots (pick tanks + dryer, *Steaming done → load dryer*) | `/production/steaming` |
 | 6 | Three-dryer board | `/production/drying` |
 | 7 | Mill feed transfers | `/production/mill-feed` |
 | 8 | Milling with 6 timed steps | `/production/milling` |
@@ -156,7 +170,9 @@ Quantities are entered in **quintals** on the floor and stored in kg. Every list
 
 ## 7. Test results
 
-`npm run db:verify` runs all migrations on an in-memory Postgres and executes the scenarios. Result: **99 passed, 0 failed** (42 existing + 57 production).
+`npm run db:verify` runs all migrations on an in-memory Postgres and executes the scenarios. Result: **111 passed, 0 failed** (42 existing + 69 production, including the client-feedback flow: trucks straight into tanks, single-tank and cross-dryer lots, busy and promised dryers, standard tank weight, 3 feed tanks, sub-kilogram leftovers).
+
+**Live database (14 Nov 2026, after migrations 11–13):** a self-rolling-back run of the new flow passed: standard weight shown to the soaking operator, truck loaded straight into Tanks 3 and 4 with one receipt, Tanks 3+4 → `LOT-2026-00001` into Dryer 3, promised dryer refused for another lot, *steaming done* loaded Dryer 3, dried lot moved to Mill Feed Tank 3, and the feed tank traced back to the truck.
 
 Factory scenarios:
 
@@ -192,7 +208,7 @@ Concurrency of ID generation relies on PostgreSQL row locking in `INSERT … ON 
 
 ## 8. Deployment
 
-1. Apply the three migrations (08, 09, 10), in order and as separate runs, to the Supabase project. *(Done on the live project on 14 Nov 2026.)*
+1. Apply migrations 08–13, in order and as separate runs, to the Supabase project. *(Done on the live project on 14 Nov 2026.)*
    - **Option A:** Supabase Dashboard → SQL Editor. Paste and run `20261114000008_production_roles.sql`, **then** `20261114000009_production_traceability.sql`. They must be separate runs.
    - **Option B:** `supabase db push`, if the project is linked.
 
@@ -200,13 +216,13 @@ Concurrency of ID generation relies on PostgreSQL row locking in `INSERT … ON 
 2. Deploy the app: `vercel deploy --prod` (or push to the connected Git branch).
 3. In Admin → Users & roles, give people the new production roles.
 4. Check that the equipment matches the floor: names, capacities and the number of mill feed tanks. Edit `production_equipment` if not.
-5. Smoke test: post an unloading QC → Production → Receipts → *Start production*, then walk one batch through to an output and trace it.
+5. Smoke test: post an unloading QC → Production → Soaking tanks → *Load a tank from trucks*, then walk one lot through steaming, drying, mill feed and milling to an output and trace it.
 
 ## 9. Pending business decisions
 
-1. **Mill feed tanks:** how many tanks are there, and what are they called? The seed has 2 (`MFT-1`, `MFT-2`).
-2. **Other equipment:** is there more than one milling line, or more than one pre-cleaner?
-3. **Soaking and steaming weight:** are soaked or steamed paddy weighed? If not, those outputs stay *estimated*.
+1. ~~Mill feed tanks~~ — resolved: 3 tanks.
+2. **Other equipment:** is there more than one milling line?
+3. ~~Soaking weight~~ — resolved: tanks are not weighed; the client will supply a **standard weight per tank for each variety** (still to be entered in Admin → Masters).
 4. **Paddy measure:** should milling recovery % be measured against dry paddy received, or against the dryer output? Reports currently use milling input, which is dryer output.
 5. **Mixed loads:**
    - Can two trucks or varieties be mixed in one tank?
@@ -215,6 +231,8 @@ Concurrency of ID generation relies on PostgreSQL row locking in `INSERT … ON 
 7. **Approval workflow:** which stages need production-manager approval before the next stage starts? Today approval is recorded but not required.
 8. **Reference recovery percentages:** should they differ by variety? Today one set is used for hybrid paddy.
 9. **Physical confirmation:** what is the tolerance between entered and physically counted output before an alert?
-10. **Mid-stage ownership:** should pre-cleaned paddy and rice in mill feed tanks be stock locations in Inventory? Today they are tracked in production only.
-11. **Rejected material:** should cleaning or drying rejects be tracked as by-product stock (husk, bran, chaff)?
+10. **Mid-stage ownership:** should paddy in mill feed tanks be stock locations in Inventory? Today they are tracked in production only.
+11. **Rejected material:** should drying or milling rejects be tracked as by-product stock (husk, bran, chaff)?
 12. **ID year boundary:** IDs restart at 00001 each calendar year (IST). Should this follow the financial year (April) instead?
+13. **"Please remove this one"** (client video, 0:29, on the Soaking screen): which item should be removed? Not identifiable from the recording.
+14. **Milling and outputs:** the client said they would explain these steps next; they are unchanged until then.

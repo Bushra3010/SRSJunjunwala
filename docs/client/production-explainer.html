@@ -80,14 +80,14 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
     <div class="why">
       <div><b>Know the source of every bag</b><span>A quality complaint leads straight to the truck, supplier, tanks, dryer and milling run.</span></div>
       <div><b>See losses stage by stage</b><span>Each stage records what went in, what came out and what was lost.</span></div>
-      <div><b>Mistakes are blocked</b><span>Wrong tank pairs, wrong dryers and using the same material twice are refused.</span></div>
+      <div><b>Mistakes are blocked</b><span>Steaming unfinished tanks, loading a full dryer and using the same material twice are refused.</span></div>
       <div><b>Nothing disappears</b><span>Records can't be deleted. Corrections need a reason and keep the original value.</span></div>
     </div>
   </section>
 
   <figure>
-    <div class="figure-frame"><img src="production-process-flow.png" alt="Diagram of the eight production stages from unloading bay to final rice grades, showing the ID each stage gets, what the ERP records and the rule it enforces." width="1400" height="1930"></div>
-    <figcaption>The eight stages, the ID each one gets, what is recorded, and the rule the system enforces.</figcaption>
+    <div class="figure-frame"><img src="production-process-flow.png" alt="Diagram of the seven production stages from unloading bay to final rice grades, showing the ID each stage gets, what the ERP records and the rule it enforces." width="1400" height="1748"></div>
+    <figcaption>The seven stages, the ID each one gets, what is recorded, and the rule the system enforces.</figcaption>
   </figure>
 
   <section>
@@ -95,41 +95,36 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
     <ol class="steps">
       <li data-n="1">
         <h3>Unloading bay (Houdi) <span class="id">RCV-2026-00001</span></h3>
-        <p>The truck is weighed (gross, then tare after unloading) and quality control checks moisture, sacks and rejected bags. Once QC is posted, the truck enters production.</p>
+        <p>The truck is weighed (gross, then tare after unloading) and quality control checks moisture, sacks and rejected bags. When the truck goes into a tank it gets a permanent receipt ID.</p>
         <p class="meta">Recorded: RST, vehicle, supplier, broker, variety, gross / tare / net weight, moisture, accepted quantity, QC person.</p>
         <p class="rule">RST numbers restart every few months. The receipt ID never repeats.</p>
       </li>
       <li data-n="2">
-        <h3>Pre-cleaning <span class="id">PC-…</span></h3>
-        <p>Dust, stones and straw are removed.</p>
-        <p class="meta">Recorded: quantity in, cleaned quantity out, cleaning loss, start and end time, operator.</p>
+        <h3>Soaking (Kachi), six tanks <span class="id">SOAK-…</span></h3>
+        <p>The unloaded paddy goes straight into a tank for about 12 hours. One truck can be split across tanks, and each tank gets its own ID and history.</p>
+        <p class="meta">Tanks can't be weighed, so each variety has a standard weight per tank, which the system uses automatically.</p>
       </li>
       <li data-n="3">
-        <h3>Soaking (Kachi), six tanks <span class="id">SOAK-…</span></h3>
-        <p>About 12 hours, 150–180 quintals per tank. One truck can be split across tanks, and each tank gets its own ID and history.</p>
-        <p class="meta">Soaked paddy absorbs water. If it isn't weighed, the quantity is marked as an estimate.</p>
+        <h3>Steaming (Pakki), lots <span class="id">LOT-…</span></h3>
+        <p>Finished tanks are steamed as a lot, usually a pair (Tank 1 then Tank 2, continuously). Any finished tanks can make a lot, for example when a tank is under repair. One lot steams at a time.</p>
+        <p class="rule">A lot can't include a tank that hasn't finished soaking.</p>
       </li>
       <li data-n="4">
-        <h3>Steaming (Pakki), one common tank <span class="id">STM-…</span></h3>
-        <p>Tanks are steamed in fixed pairs: 1 + 2, 3 + 4, 5 + 6, one pair at a time.</p>
-        <p class="rule">A pair starts only when both its tanks have finished soaking. Pairs can't be mixed.</p>
+        <h3>Drying, three dryers <span class="id">DRY-…</span></h3>
+        <p>Steaming passes straight into a dryer for about 12–14 hours. Any lot can go into any free dryer, chosen when the lot starts steaming. One click when steaming is done loads the dryer.</p>
+        <p class="meta">Recorded: input, output, moisture %, drying loss, times, operator.</p>
+        <p class="rule">A dryer that is still full can't be given another lot.</p>
       </li>
       <li data-n="5">
-        <h3>Drying, three dryers <span class="id">DRY-…</span></h3>
-        <p>About 12–14 hours, 270–340 quintals. Pair 1 + 2 goes to Dryer 1, pair 3 + 4 to Dryer 2, pair 5 + 6 to Dryer 3.</p>
-        <p class="meta">Recorded: input, output, moisture %, drying loss, times, operator.</p>
-        <p class="rule">Sending a pair to the wrong dryer is refused.</p>
-      </li>
-      <li data-n="6">
-        <h3>Mill feed tanks <span class="id">MFD-…</span></h3>
+        <h3>Mill feed, three tanks <span class="id">MFD-…</span></h3>
         <p>Dried paddy moves to the mill feed tanks. One dryer batch can be split over several transfers, and each keeps its link to the dryer.</p>
       </li>
-      <li data-n="7">
+      <li data-n="6">
         <h3>Milling, 4–6 hours <span class="id">MIL-…</span></h3>
         <p>Cleaning, dehusking, whitener, silky, sortex, grading. The start and end of each machine is recorded, with paddy in, rice out, loss, downtime and faults.</p>
         <p class="rule">Milling more than one feed lot together needs the production manager's approval.</p>
       </li>
-      <li data-n="8">
+      <li data-n="7">
         <h3>Final output by grade <span class="id">OUT-…</span></h3>
         <p>Each grade gets its own ID with the actual quantity produced. It is quality-checked, approved, then counted into the finished-goods store, which adds it to inventory.</p>
       </li>
@@ -156,8 +151,8 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
   </section>
 
   <figure>
-    <div class="figure-frame"><img src="traceability-example.png" alt="Example trace of one 1st Wand output back through milling, mill feed, drying, steaming, soaking and pre-cleaning to truck RST 201." width="1200" height="976"></div>
-    <figcaption>Searching one output ID shows the whole chain back to the truck. Illustrative figures from the system's test run.</figcaption>
+    <div class="figure-frame"><img src="traceability-example.png" alt="Example trace of one 1st Wand output back through milling, mill feed, drying, the steaming lot and soaking to truck RST 201." width="1200" height="884"></div>
+    <figcaption>Searching one output ID shows the whole chain back to the truck. Illustrative figures.</figcaption>
   </figure>
 
   <section>
@@ -166,7 +161,7 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
       <table>
         <thead><tr><th>Label</th><th>Meaning</th></tr></thead>
         <tbody>
-          <tr><td><b>Estimated</b></td><td>Not weighed; carried forward from the previous stage</td></tr>
+          <tr><td><b>Estimated</b></td><td>Not weighed; from the standard weight or the previous stage</td></tr>
           <tr><td><b>Operator entered</b></td><td>Weighed and entered by the operator</td></tr>
           <tr><td><b>Approved</b></td><td>Checked and approved by the production manager</td></tr>
           <tr><td><b>Physically confirmed</b></td><td>Counted into the store and part of inventory</td></tr>
@@ -181,9 +176,9 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
       <table>
         <thead><tr><th>Role</th><th>Responsibility</th></tr></thead>
         <tbody>
-          <tr><td>QC head</td><td>Sends posted trucks into production</td></tr>
-          <tr><td>Soaking operator</td><td>Pre-cleaning and the six soaking tanks</td></tr>
-          <tr><td>Steaming operator</td><td>The common steaming tank</td></tr>
+          <tr><td>QC head</td><td>Checks and posts the unloading QC</td></tr>
+          <tr><td>Soaking operator</td><td>Loading trucks into the six soaking tanks</td></tr>
+          <tr><td>Steaming operator</td><td>Steaming lots and loading them into a dryer</td></tr>
           <tr><td>Drying operator</td><td>The three dryers and mill feed transfers</td></tr>
           <tr><td>Milling operator</td><td>Milling steps and recording rice output</td></tr>
           <tr><td>Production manager</td><td>Approvals, corrections, cancellations, store confirmation</td></tr>
@@ -199,7 +194,7 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
     <ul>
       <li>A live plant floor: every tank, the steamer, the dryers and the mill line, with what is running, for how long, and what is overdue.</li>
       <li>Alerts for overdue batches, open machine faults and quantities waiting for approval.</li>
-      <li>Ten reports that download to Excel: daily production, tank-wise soaking, pair-wise steaming, dryer-wise drying, milling in and out, grade-wise output against reference, losses by stage, operator activity, batch genealogy and truck-to-rice traceability.</li>
+      <li>Ten reports that download to Excel: daily production, tank-wise soaking, steaming lots, dryer-wise drying, milling in and out, grade-wise output against reference, losses by stage, operator activity, batch genealogy and truck-to-rice traceability.</li>
     </ul>
   </section>
 

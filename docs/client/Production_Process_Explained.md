@@ -10,53 +10,44 @@ Every load of paddy that enters the factory gets a permanent ID, and every step 
 
 - **Know the source of every bag.** If a customer raises a quality issue, you can see which truck, supplier, tanks, dryer and milling run it came from within seconds.
 - **No guesswork on quantities.** Every stage records what went in, what came out, and what was lost, so losses are visible stage by stage.
-- **Mistakes are blocked, not just reported.** The system will not let someone steam the wrong tank pair, load the wrong dryer, or use the same material twice.
+- **Mistakes are blocked, not just reported.** The system will not let someone steam a tank that hasn't finished soaking, load a dryer that is still full, or use the same material twice.
 - **Nothing disappears.** Records can't be deleted. Corrections and cancellations need a reason and keep the original values for audit.
 
 ## The process, step by step
 
 ### 1. Truck arrives — Unloading bay (Houdi)
-The truck is weighed on the weighbridge (gross weight, then tare after unloading). Quality control checks the paddy: moisture, sacks, rejected bags. Once QC is posted, the truck enters production with a **Receipt ID** such as `RCV-2026-00001`.
+The truck is weighed on the weighbridge (gross weight, then tare after unloading). Quality control checks the paddy: moisture, sacks, rejected bags. Once QC is posted, the truck is ready to go into a soaking tank.
 
 - **Recorded:** RST number, vehicle number, supplier, broker, variety, gross / tare / net weight, moisture, accepted quantity, who did QC.
-- **Why a separate ID:** RST numbers restart every few months. The Receipt ID never repeats, so old and new trucks with the same RST can never be confused.
+- **Why a separate ID:** RST numbers restart every few months. When the truck goes into a tank it gets a **Receipt ID** such as `RCV-2026-00001`, which never repeats, so old and new trucks with the same RST can never be confused.
 
-### 2. Pre-cleaning
-The paddy is cleaned of dust, stones and straw. **Batch ID:** `PC-2026-…`
+### 2. Soaking (Kachi) — 6 tanks
+The unloaded paddy goes straight into a soaking tank for about **12 hours**. One truck can be split across two or more tanks; each tank gets its own **Soaking ID** (`SOAK-2026-…`) and keeps its own history.
 
-- **Recorded:** quantity in, cleaned quantity out, cleaning loss, start and end time, operator.
+- **Recorded:** tank, which truck, quantity, soaking start and stop time, operator.
+- **Weight:** tanks can't be weighed, so each paddy variety has a **standard weight per tank**. The system uses it automatically.
 
-### 3. Soaking (Kachi) — 6 tanks
-Cleaned paddy is soaked in one of six tanks for about **12 hours** (150–180 quintals per tank). One truck can be split across two or more tanks; each tank gets its own **Soaking ID** (`SOAK-2026-…`) and keeps its own history.
+### 3. Steaming (Pakki) — lots
+Finished tanks are steamed in the common steaming tank as a **lot** with its own **Lot number** (`LOT-2026-…`). A lot is usually a pair of tanks (Tank 1 then Tank 2, steamed continuously), but any finished tanks can make a lot, for example when one tank is under repair. One lot steams at a time.
 
-- **Recorded:** tank number, how much came from which truck, start and end time, operator.
-- **Note:** soaked paddy absorbs water. If it is not weighed, the system marks the quantity as an *estimate* rather than pretending it is exact.
+- **Recorded:** which tanks are in the lot, the dryer it goes into, start and end time, operator.
 
-### 4. Steaming (Pakki) — 1 common steaming tank
-Tanks are steamed in **fixed pairs**: Tank 1 + 2, Tank 3 + 4, Tank 5 + 6. There is only one steaming tank, so **only one pair at a time**. **Batch ID:** `STM-2026-…`
-
-- **Rules the system enforces:**
-  - A pair can only be steamed when **both** its tanks have finished soaking.
-  - Tanks from different pairs can never be mixed.
-  - A second pair cannot start while the steamer is in use.
-
-### 5. Drying — 3 dryers
-Each steamed pair goes to its own dryer for about **12–14 hours** (270–340 quintals):
-**Pair 1+2 → Dryer 1 · Pair 3+4 → Dryer 2 · Pair 5+6 → Dryer 3.** **Batch ID:** `DRY-2026-…`
+### 4. Drying — 3 dryers
+Steaming passes straight into a dryer for about **12–14 hours** (270–340 quintals). **Any lot can go into any free dryer**; the operator picks it when the lot starts steaming. When steaming is done, one click loads the dryer. **Batch ID:** `DRY-2026-…`
 
 - **Recorded:** dryer, input, output after drying, moisture %, drying loss, times, operator.
-- **Rule:** sending a pair to the wrong dryer is blocked.
+- **Rule:** a dryer that is still full can't be given another lot.
 
-### 6. Mill feed tanks
-Dried paddy is moved into the mill feed tanks. One dryer batch can be split over several transfers; each transfer gets a **Mill Feed ID** (`MFD-2026-…`) and keeps its link back to the dryer.
+### 5. Mill feed — 3 tanks
+Dried paddy is moved into the three mill feed tanks. One dryer batch can be split over several transfers; each transfer gets a **Mill Feed ID** (`MFD-2026-…`) and keeps its link back to the dryer.
 
-### 7. Milling — 4–6 hours
+### 6. Milling — 4–6 hours
 Cleaning → Dehusking → Whitener → Silky → Sortex → Grading. **Batch ID:** `MIL-2026-…`
 
 - **Recorded:** start and end time of each of the six machines, input paddy, rice output, processing loss, downtime and faults.
 - **Rule:** milling material from more than one feed lot together needs the production manager's approval.
 
-### 8. Final output — rice by grade
+### 7. Final output — rice by grade
 Every grade produced from a milling run is recorded separately with its own **Output ID** (`OUT-2026-…`):
 
 | Grade | Reference recovery (hybrid paddy) |
@@ -76,9 +67,8 @@ These percentages are **for comparison only**. The system always records the act
 Search `OUT-2026-00001` (1st Wand) and the system shows:
 
 > **Truck** RCV-2026-00001 · RST 201 · Vehicle PB 10 GH 2020 · Green Leaf Traders · PB 1121 · 160 q received
-> → **Pre-cleaning** PC-2026-00001 · 159 q cleaned
-> → **Soaking** Tank 1 (79.5 q) and Tank 2 (79.5 q), 12 h each
-> → **Steaming** STM-2026-00001 · pair 1+2 · 160.5 q
+> → **Soaking** Tank 1 (80 q) and Tank 2 (80 q), 12 h each
+> → **Steaming lot** LOT-2026-00001 · Tank 1 then Tank 2 · into Dryer 1
 > → **Drying** Dryer 1 · 13 h · 13.5% moisture · 140 q out
 > → **Mill feed** two transfers (90 q + 50 q)
 > → **Milling** MIL-2026-00001 · 140 q in · 95 q rice out
@@ -86,7 +76,7 @@ Search `OUT-2026-00001` (1st Wand) and the system shows:
 
 …plus a full timeline of every start, stop and transfer, with the time and the person who did it. Searching the truck (by Receipt ID, RST or vehicle number) shows the same chain forwards, ending in every rice grade it produced.
 
-*(Figures above are an illustration of how the screen reads, taken from the system's test run.)*
+*(Figures above are illustrative.)*
 
 ## How quantities are trusted
 
@@ -94,7 +84,7 @@ Each quantity carries a label so everyone knows how reliable it is:
 
 | Label | Meaning |
 |---|---|
-| **Estimated** | Not weighed; carried forward from the previous stage |
+| **Estimated** | Not weighed; taken from the standard weight or carried forward from the previous stage |
 | **Operator entered** | Weighed and entered by the operator |
 | **Approved** | Checked and approved by the production manager |
 | **Physically confirmed** | Counted into the store; now part of inventory |
@@ -103,9 +93,9 @@ Each quantity carries a label so everyone knows how reliable it is:
 
 | Role | Responsibility |
 |---|---|
-| QC head | Sends posted trucks into production |
-| Soaking operator | Pre-cleaning and the six soaking tanks |
-| Steaming operator | The common steaming tank |
+| QC head | Checks and posts the unloading QC |
+| Soaking operator | Loading trucks into the six soaking tanks |
+| Steaming operator | Steaming lots and loading them into a dryer |
 | Drying operator | The three dryers and mill feed transfers |
 | Milling operator | Milling steps and recording rice output |
 | Production manager | Approvals, corrections, cancellations, stock confirmation |
@@ -119,6 +109,6 @@ Each person only sees the buttons for their own job, and the database enforces t
 - **Alerts:** overdue batches, open machine faults, quantities still waiting for approval.
 - **Ten reports, downloadable to Excel:**
   - **Production by day:** daily production.
-  - **By equipment:** tank-wise soaking, pair-wise steaming, dryer-wise drying, milling in/out.
+  - **By equipment:** tank-wise soaking, steaming lots, dryer-wise drying, milling in/out.
   - **Results and losses:** grade-wise output vs reference, losses stage by stage.
   - **People and tracing:** operator activity, batch genealogy, truck-to-rice traceability.

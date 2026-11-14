@@ -5,7 +5,7 @@ import { BATCH_COLUMNS, STAGES, STAGE_META, loadMasters, type Batch } from "@/li
 export const REPORTS = [
   { key: "daily", label: "Daily production" },
   { key: "soaking", label: "Tank-wise soaking" },
-  { key: "steaming", label: "Pair-wise steaming" },
+  { key: "steaming", label: "Steaming lots" },
   { key: "dryer", label: "Dryer-wise production" },
   { key: "milling", label: "Milling input / output" },
   { key: "grade", label: "Grade-wise production" },
@@ -48,13 +48,12 @@ export async function buildReport(key: ReportKey, from: string, to: string): Pro
       const days = [...new Set(live.map((b) => istDay(b.started_at)))].sort();
       return {
         title: "Daily production (quintals)",
-        columns: ["Date", "Paddy received", "Pre-cleaned", "Soaked (in)", "Steamed (in)", "Dried (out)", "Milled (in)", "Rice output", "Batches cancelled"],
+        columns: ["Date", "Paddy received", "Soaked (in)", "Steamed (in)", "Dried (out)", "Milled (in)", "Rice output", "Batches cancelled"],
         rows: days.map((d) => {
           const day = (s: Batch["stage"]) => st(s).filter((b) => istDay(b.started_at) === d);
           return [
             d,
             qtl(sum(day("receipt"), (b) => b.output_kg)),
-            qtl(sum(day("precleaning"), (b) => b.output_kg)),
             qtl(sum(day("soaking"), (b) => b.input_kg)),
             qtl(sum(day("steaming"), (b) => b.input_kg)),
             qtl(sum(day("drying"), (b) => b.output_kg)),
@@ -69,11 +68,12 @@ export async function buildReport(key: ReportKey, from: string, to: string): Pro
       const tanks = m.equipment.filter((e) => e.kind === "soaking_tank");
       return {
         title: "Tank-wise soaking",
-        columns: ["Tank", "Pair", "Batches", "Input (q)", "Output (q)", "Estimated outputs", "Avg soak (h)", "Last batch"],
+        note: "Tanks are not weighed. Quantities come from the variety's standard weight per tank unless an actual weight was entered.",
+        columns: ["Tank", "Batches", "Input (q)", "Output (q)", "Estimated outputs", "Avg soak (h)", "Last batch"],
         rows: tanks.map((t) => {
           const bs = st("soaking").filter((b) => b.equipment_id === t.id);
           return [
-            t.name, t.pair_no, bs.length,
+            t.name, bs.length,
             qtl(sum(bs, (b) => b.input_kg)), qtl(sum(bs, (b) => b.output_kg)),
             bs.filter((b) => b.output_qty_status === "estimated").length,
             avg(bs.filter((b) => b.duration_minutes).map((b) => Number(b.duration_minutes) / 60)),
@@ -82,19 +82,28 @@ export async function buildReport(key: ReportKey, from: string, to: string): Pro
         }),
       };
     }
-    case "steaming":
+    case "steaming": {
+      const lots = st("steaming");
+      const ids = lots.map((b) => b.id);
+      const { data: edges } = ids.length
+        ? await supabase.from("batch_inputs").select("child_id, parent:production_batches!batch_inputs_parent_id_fkey(equipment_id)").in("child_id", ids)
+        : { data: [] };
+      const tanksOf = (id: string) =>
+        (edges ?? [])
+          .filter((e) => e.child_id === id)
+          .map((e) => m.equipmentById.get((e.parent as unknown as { equipment_id: string }).equipment_id)?.number)
+          .sort()
+          .join(" + ");
       return {
-        title: "Pair-wise steaming",
-        columns: ["Pair", "Tanks", "Runs", "Input (q)", "Output (q)", "Avg steam (h)", "Batches"],
-        rows: [1, 2, 3].map((p) => {
-          const bs = st("steaming").filter((b) => b.pair_no === p);
-          return [
-            p, `${p * 2 - 1} + ${p * 2}`, bs.length, qtl(sum(bs, (b) => b.input_kg)), qtl(sum(bs, (b) => b.output_kg)),
-            avg(bs.filter((b) => b.duration_minutes).map((b) => Number(b.duration_minutes) / 60)),
-            bs.map((b) => b.batch_no).join(" "),
-          ];
-        }),
+        title: "Steaming lots",
+        columns: ["Lot", "Tanks", "Into dryer", "Started", "Ended", "Steaming (h)", "Input (q)", "Status"],
+        rows: lots.map((b) => [
+          b.batch_no, tanksOf(b.id), b.target_dryer_id ? (m.equipmentById.get(b.target_dryer_id)?.name ?? "") : "",
+          istTime(b.started_at), istTime(b.ended_at), b.duration_minutes ? Math.round(Number(b.duration_minutes) / 6) / 10 : null,
+          qtl(b.input_kg), b.status,
+        ]),
       };
+    }
     case "dryer": {
       const dryers = m.equipment.filter((e) => e.kind === "dryer");
       return {
@@ -154,7 +163,7 @@ export async function buildReport(key: ReportKey, from: string, to: string): Pro
         title: "Quantity loss & reconciliation by stage",
         note: "Loss = input − output − rejected. Soaking/steaming can gain weight (water). Estimated outputs were not weighed.",
         columns: ["Stage", "Completed batches", "Input (q)", "Output (q)", "Rejected (q)", "Loss (q)", "Loss %", "Estimated", "Entered", "Approved", "Confirmed"],
-        rows: STAGES.filter((s) => s !== "receipt" && s !== "output").map((s) => {
+        rows: STAGES.filter((s) => s !== "receipt" && s !== "output" && (s !== "precleaning" || st(s).length > 0)).map((s) => {
           const bs = st(s).filter((b) => b.output_kg !== null);
           const inKg = sum(bs, (b) => b.input_kg);
           const loss = sum(bs, (b) => b.loss_kg);

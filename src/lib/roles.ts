@@ -28,7 +28,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   store_custodian: "Store room custodian",
   commercial: "Commercial / Orders",
   production_manager: "Production manager",
-  soaking_operator: "Soaking / pre-cleaning operator",
+  soaking_operator: "Soaking operator",
   steaming_operator: "Steaming operator",
   drying_operator: "Drying operator",
   milling_operator: "Milling operator",

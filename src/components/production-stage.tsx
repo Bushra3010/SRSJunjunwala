@@ -379,8 +379,8 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
             extra={
               stage === "drying"
                 ? { head: "Moisture", cell: (b) => (b.moisture_pct === null ? "—" : `${b.moisture_pct}%`) }
-                : stage === "steaming" || stage === "soaking"
-                  ? { head: "Pair", cell: (b) => (b.pair_no ? `Tanks ${b.pair_no * 2 - 1}+${b.pair_no * 2}` : "—") }
+                : stage === "steaming"
+                  ? { head: "Into dryer", cell: (b) => (b.target_dryer_id ? (m.equipmentById.get(b.target_dryer_id)?.name ?? "—") : "—") }
                   : undefined
             }
           />

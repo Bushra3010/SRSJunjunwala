@@ -122,7 +122,7 @@ export default async function TracePage({ searchParams }: { searchParams: Promis
           <Card tone="#3e6fc0" title="Genealogy by stage" className="mb-6">
             <div className="overflow-x-auto p-4">
               <div className="flex min-w-max gap-3">
-                {STAGES.map((stage) => {
+                {STAGES.filter((stage) => stage !== "precleaning" || family.some((b) => b.stage === "precleaning")).map((stage) => {
                   const items = family.filter((b) => b.stage === stage).sort((a, b) => (a.started_at ?? "").localeCompare(b.started_at ?? ""));
                   return (
                     <div key={stage} className="w-52 shrink-0">
@@ -225,7 +225,7 @@ export default async function TracePage({ searchParams }: { searchParams: Promis
       {!query && (
         <Card tone="#4b5563" title="How tracing works">
           <div className="space-y-2 p-5 text-[13px] text-muted">
-            <p>Every stage gets a permanent ID: RCV (truck) → PC (pre-cleaning) → SOAK (tank) → STM (steaming pair) → DRY (dryer) → MFD (mill feed) → MIL (milling) → OUT (rice grade).</p>
+            <p>Every stage gets a permanent ID: RCV (truck) → SOAK (tank) → LOT (steaming lot) → DRY (dryer) → MFD (mill feed) → MIL (milling) → OUT (rice grade).</p>
             <p>Each move records which batch fed which, and how much. Searching an OUT ID walks back to the truck; searching an RCV or RST walks forward to every rice grade it produced.</p>
           </div>
         </Card>
