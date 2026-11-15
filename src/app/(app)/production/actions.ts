@@ -15,7 +15,7 @@ function qtl(fd: FormData, key: string): number | null {
 
 function backPath(fd: FormData, fallback: string) {
   const p = str(fd, "back");
-  return p.startsWith("/production") ? p : fallback;
+  return p.startsWith("/production") || p.startsWith("/floor") ? p : fallback;
 }
 
 function done(path: string, notice: string): never {
@@ -283,7 +283,7 @@ export async function stopSoaking(fd: FormData) {
     p_remarks: optStr(fd, "remarks"),
   });
   if (error) back(path, { error });
-  done(path, `${str(fd, "batch_no")} soaking stopped — steamed into the dryer`);
+  done(path, `${str(fd, "batch_no")} soaking stopped — steamed into ${str(fd, "dryer_name") || "the dryer"}`);
 }
 
 /** Dryer start: everything filled into the dryer starts drying. */
@@ -316,7 +316,7 @@ export async function stopDryer(fd: FormData) {
     p_remarks: optStr(fd, "remarks"),
   });
   if (error) back(path, { error });
-  done(path, `${str(fd, "batch_no")} stopped at ${moisture}% moisture and unloaded into its feed tank`);
+  done(path, `${str(fd, "batch_no")} stopped at ${moisture}% moisture and unloaded into ${str(fd, "feed_name") || "its feed tank"}`);
 }
 
 /** Milling: start with the paddy from one dryer's feed tank. */

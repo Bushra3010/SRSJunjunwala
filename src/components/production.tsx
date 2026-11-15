@@ -8,6 +8,7 @@ import { cancelBatch, completeBatch, finishSteaming, startBatch, startSoaking, s
 
 export const PROD_TABS = [
   { key: "overview", label: "Overview", href: "/production" },
+  { key: "floor", label: "Dryer section (phone)", href: "/floor" },
   { key: "receipts", label: "Trucks", href: "/production/receipts" },
   { key: "soaking", label: "Soaking tanks", href: "/production/soaking" },
   { key: "drying", label: "Dryers", href: "/production/drying" },
