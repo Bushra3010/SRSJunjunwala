@@ -126,10 +126,10 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
   const steamerBusy = steamer ? state.get(steamer.id) : undefined;
   // Any lot may go into any free dryer. A dryer is unavailable while it holds paddy or is
   // promised to a lot that is steaming right now.
-  const dryerStatus: { id: string; name: string; number: number; usual: string; busy?: string; fillingKg: number; fillingLots: number; fillingSince?: string }[] = [];
+  const dryerStatus: { id: string; name: string; number: number; usual: string; busy?: string; fillingKg: number; fillingLots: number; lotCount: number; fillingSince?: string }[] = [];
   if (cfg.mode === "steaming" || cfg.mode === "drying" || stage === "soaking") {
     const { data: fillRows } = await m.supabase.rpc("dryer_filling");
-    const filling = new Map(((fillRows ?? []) as { dryer_id: string; lots: number; filling_kg: number; first_at: string }[]).map((f) => [f.dryer_id, f]));
+    const filling = new Map(((fillRows ?? []) as { dryer_id: string; lots: number; tanks?: number; filling_kg: number; first_at: string }[]).map((f) => [f.dryer_id, f]));
     const dryers = m.equipment.filter((e) => e.kind === "dryer");
     const ds = await equipmentState(dryers.map((d) => d.id));
     const { data: promised } = await m.supabase
@@ -148,7 +148,8 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
         usual: d.pair_no ? `usually Tanks ${d.pair_no * 2 - 1} + ${d.pair_no * 2}` : "",
         busy: hold,
         fillingKg: Number(f?.filling_kg ?? 0),
-        fillingLots: Number(f?.lots ?? 0),
+        fillingLots: Number(f?.tanks ?? f?.lots ?? 0),
+        lotCount: Number(f?.lots ?? 0),
         fillingSince: f?.first_at,
       });
     }
@@ -291,7 +292,7 @@ export async function StageScreen({ stage, sp }: { stage: Stage; sp: StageSP }) 
                         {d.busy
                           ? `Drying or holding dried paddy (${d.busy}) — stop it below`
                           : d.fillingLots
-                            ? `Filling: ${q(d.fillingKg)} from ${d.fillingLots} tank${d.fillingLots > 1 ? "s" : ""} since ${dateTime(d.fillingSince)}`
+                            ? `Filling: ${q(d.fillingKg)} from ${d.fillingLots} tank${d.fillingLots > 1 ? "s" : ""} in ${d.lotCount} lot${d.lotCount > 1 ? "s" : ""} since ${dateTime(d.fillingSince)}`
                             : "Empty — stop a soaking tank into it to start filling"}
                       </div>
                     </div>

@@ -104,6 +104,7 @@ export function eventLabel(type: string) {
     transferred_out: "Material transferred out",
     fully_consumed: "Fully moved to next stage",
     dryer_assigned: "Dryer chosen for this lot",
+    tank_added: "Second tank joined this lot",
     material_released: "Material released back",
     material_returned: "Material returned (child cancelled)",
     output_recorded: "Final output recorded",

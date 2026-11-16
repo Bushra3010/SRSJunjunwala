@@ -460,7 +460,7 @@ async function main() {
   // ---- Client flow (14 Nov): truck straight into tanks, pair lot steams into its dryer ----
   console.log("\nClient flow: trucks to tanks, pair lots, 3 feed tanks");
   check("three mill feed tanks", !!eq["MFT-3"] || !!(await one(db, "select id from public.production_equipment where code = 'MFT-3'")));
-  const newTruck = async (rst, vehicle) => {
+  const newTruck = async (rst, vehicle, variety = ids.IR64) => {
     const tk = await as(users.weighbridge_operator, (tx) =>
       one(tx, `insert into public.weighbridge_tickets (plant_id, rst, vehicle_no, direction, gross_kg, weighed_at)
                values ($1, $2, $3, 'inbound', 28000, '2026-10-12 08:00+05:30') returning *`, [PLANT, rst, vehicle]));
@@ -468,7 +468,7 @@ async function main() {
     const qid = (await as(users.qc_unloading, (tx) => one(tx, "select public.start_qc_inbound($1) as id", [tk.id]))).id;
     await as(users.qc_unloading, async (tx) => {
       await tx.query("update public.qc_inbound set supplier_id = $2, location_id = $3 where id = $1", [qid, party["Kaveri Agro"], loc["YARD-A"]]);
-      await tx.query("insert into public.qc_inbound_lines (qc_id, line_no, variety_id, moisture_pct, sacks_received) values ($1, 1, $2, 14, 320)", [qid, ids.IR64]);
+      await tx.query("insert into public.qc_inbound_lines (qc_id, line_no, variety_id, moisture_pct, sacks_received) values ($1, 1, $2, 14, 320)", [qid, variety]);
       await tx.query("select public.submit_qc_inbound($1)", [qid]);
     });
     await as(users.qc_head, (tx) => tx.query("select public.post_qc_inbound($1)", [qid]));
@@ -594,7 +594,8 @@ async function main() {
   check("soaking stop goes through steaming (LOT) into the chosen dryer", LOTA.stage === "steaming" && LOTA.status === "completed" && LOTA.target_dryer_id === eq["DRYER-1"]
     && (await batch(tPart)).status === "consumed" && lotARetry === lotA);
   const filling = await as(users.management, (tx) => all(tx, "select * from public.dryer_filling() where dryer_id = $1", [eq["DRYER-1"]]));
-  check("Dryer 1 shows as filling with two tanks", !!lotB && Number(filling[0]?.lots) === 2 && Number(filling[0]?.filling_kg) === Number(PART.input_kg) + 16500, JSON.stringify(filling));
+  check("second tank into the same dryer joins the first tank's lot", lotB === lotA, `${lotA} ${lotB}`);
+  check("Dryer 1 shows as filling with two tanks in one lot", Number(filling[0]?.lots) === 1 && Number(filling[0]?.tanks) === 2 && Number(filling[0]?.filling_kg) === Number(PART.input_kg) + 16500, JSON.stringify(filling));
   const dStart = (await as(users.drying_operator, (tx) => one(tx, "select public.start_dryer($1, '2026-10-15 22:30+05:30') as id", [eq["DRYER-1"]]))).id;
   const DS = await batch(dStart);
   check("dryer start takes everything filled into it", DS.stage === "drying" && DS.status === "running" && Number(DS.input_kg) === Number(PART.input_kg) + 16500);
@@ -613,6 +614,42 @@ async function main() {
     (tx) => tx.query("select public.start_milling_from_dryer(3, $1)", [eq["MILL-1"]]), /NOTHING_IN_FEED_TANK/);
   const anc3 = await as(users.management, (tx) => all(tx, "select distinct b.stage from public.trace_ancestors($1) a join public.production_batches b on b.id = a.batch_id", [mill2]));
   check("milling still traces back to the trucks", ["receipt", "soaking", "steaming", "drying", "mill_feed"].every((st) => anc3.some((a) => a.stage === st)));
+
+  // Tank pairs share one steaming lot number (client decision, 16 Nov).
+  console.log("\nTank pairs share one lot number");
+  await newTruck(401, "HR 55 AB 4010");
+  await newTruck(402, "HR 55 AB 4020");
+  await newTruck(403, "HR 55 AB 4030");
+  await db.query("update public.varieties set std_tank_kg = 15000 where code = 'PB1121'");
+  await newTruck(404, "HR 55 AB 4040", ids.PB1121);
+  const p3 = await soakStd("TANK-3", "IR64", "2026-10-17 08:00+05:30");
+  const p4 = await soakStd("TANK-4", "IR64", "2026-10-17 08:10+05:30");
+  const p5 = await soakStd("TANK-5", "IR64", "2026-10-17 08:20+05:30");
+  const p6 = await soakStd("TANK-6", "PB1121", "2026-10-17 08:30+05:30");
+  const lotX = await stopSoak(p3, "DRYER-1", "2026-10-17 20:00+05:30");
+  const lotX2 = await stopSoak(p4, "DRYER-1", "2026-10-17 20:40+05:30");
+  const lotY = await stopSoak(p5, "DRYER-1", "2026-10-17 21:20+05:30");
+  const lotZ = await stopSoak(p6, "DRYER-1", "2026-10-17 22:00+05:30");
+  const lotX2retry = await stopSoak(p4, "DRYER-1", "2026-10-17 20:40+05:30");
+  const X = await batch(lotX);
+  const xIn = await all(db, "select parent_id, qty_kg from public.batch_inputs where child_id = $1", [lotX]);
+  const want = Number((await batch(p3)).input_kg) + Number((await batch(p4)).input_kg);
+  check("Tank 3 + Tank 4 into Dryer 1 share one LOT number (pair 2)", lotX2 === lotX && X.pair_no === 2 && xIn.length === 2 && /^LOT-/.test(X.batch_no), `${X.batch_no} pair ${X.pair_no}`);
+  check("pair lot quantity is both tanks together", Number(X.input_kg) === want && Number(X.output_kg) === want && Number(await one(db, "select public.batch_available_kg($1) as a", [lotX]).then((r) => r.a)) === want, `${X.input_kg} ${want}`);
+  const xOut = await one(db, "select sum(qty_kg) as s from public.batch_quantity_ledger where batch_id = $1 and entry = 'output'", [lotX]);
+  check("ledger records the second tank's steamed output", Number(xOut.s) === want, xOut.s);
+  check("a third tank starts the next lot", lotY !== lotX && (await batch(lotY)).pair_no === null);
+  check("a different variety never joins another variety's lot", lotZ !== lotY && lotZ !== lotX);
+  check("stopping the same tank again is safe (returns its lot)", lotX2retry === lotX);
+  check("each tank is fully moved into its lot", (await batch(p3)).status === "consumed" && (await batch(p4)).status === "consumed");
+  const xEvents = await all(db, "select event_type from public.batch_events where batch_id = $1", [lotX]);
+  check("lot timeline shows the second tank joining", xEvents.some((e) => e.event_type === "tank_added"));
+  const fill2 = await as(users.management, (tx) => one(tx, "select * from public.dryer_filling() where dryer_id = $1", [eq["DRYER-1"]]));
+  check("Dryer 1 filling: 3 lots holding 4 tanks", Number(fill2.lots) === 3 && Number(fill2.tanks) === 4, JSON.stringify(fill2));
+  const dPair = (await as(users.drying_operator, (tx) => one(tx, "select public.start_dryer($1, '2026-10-17 22:30+05:30') as id", [eq["DRYER-1"]]))).id;
+  check("dryer start takes all three lots", Number((await batch(dPair)).input_kg) === Number(fill2.filling_kg));
+  const p4desc = await as(users.management, (tx) => all(tx, "select batch_id from public.trace_descendants($1)", [p4]));
+  check("second tank traces forward through the shared lot to the dryer", p4desc.some((r) => r.batch_id === lotX) && p4desc.some((r) => r.batch_id === dPair));
 
   // Standard recovery per variety (rice grades and by-products).
   check("by-products include Polish, Broken, Rejection", (await all(db, "select code from public.rice_grades where kind = 'by_product'")).map((r) => r.code).sort().join() === "BROKEN,POLISH,REJECTION,RESORT");

@@ -44,7 +44,7 @@ export default async function FloorPage({ searchParams }: { searchParams: Promis
     m.supabase.from("production_faults").select("id, equipment_id, severity, description, started_at").is("ended_at", null).order("started_at", { ascending: false }).limit(20),
   ]);
   const unloaded = ((unloadedRes.data ?? []) as UnloadedRow[]).filter((r) => r.std_tank_kg);
-  const filling = new Map(((fillRes.data ?? []) as { dryer_id: string; lots: number; filling_kg: number; first_at: string }[]).map((f) => [f.dryer_id, f]));
+  const filling = new Map(((fillRes.data ?? []) as { dryer_id: string; lots: number; tanks?: number; filling_kg: number; first_at: string }[]).map((f) => [f.dryer_id, f]));
   const faults = (faultsRes.data ?? []) as { id: string; equipment_id: string | null; severity: string; description: string; started_at: string }[];
 
   const dryerInfo = dryers.map((d) => {
@@ -58,7 +58,8 @@ export default async function FloorPage({ searchParams }: { searchParams: Promis
       drying,
       busy: s?.batch.batch_no ?? promised,
       fillingKg: Number(f?.filling_kg ?? 0),
-      fillingLots: Number(f?.lots ?? 0),
+      fillingLots: Number(f?.tanks ?? f?.lots ?? 0),
+        lotCount: Number(f?.lots ?? 0),
       fillingSince: f?.first_at,
       faults: faults.filter((x) => x.equipment_id === d.id).length,
     };
@@ -207,6 +208,8 @@ export default async function FloorPage({ searchParams }: { searchParams: Promis
               <br />
               Stop sends the tank through steaming into <b>Dryer {sel?.number}</b>
               {sel?.busy ? <b className="text-[#c0262e]"> — drying now, choose another dryer</b> : null}.
+              <br />
+              Two tanks stopped one after the other into the same dryer share one lot number.
             </div>
             <ul className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-3">
               {tanks.map((t) => {
@@ -320,7 +323,7 @@ export default async function FloorPage({ searchParams }: { searchParams: Promis
                       <p className="text-[14px] text-[#8a5a00]">Holding {sel.busy} — finish it on the Dryers page.</p>
                     ) : sel.fillingLots ? (
                       <p className="text-[14px]">
-                        <b className="text-[#8a5a00]">Filling:</b> {q(sel.fillingKg, 0)} from {sel.fillingLots} tank{sel.fillingLots > 1 ? "s" : ""}
+                        <b className="text-[#8a5a00]">Filling:</b> {q(sel.fillingKg, 0)} from {sel.fillingLots} tank{sel.fillingLots > 1 ? "s" : ""}{sel.lotCount > 0 ? ` · ${sel.lotCount} lot${sel.lotCount > 1 ? "s" : ""}` : ""}
                         <br />
                         <span className="text-[#475569]">since {clock(sel.fillingSince)} · press Start Drying when full</span>
                       </p>
