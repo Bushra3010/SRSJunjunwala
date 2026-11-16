@@ -81,7 +81,7 @@ const CONFIG: Record<
     kinds: ["mill_line"],
     tab: "milling",
     description: "Start milling with the paddy from Dryer 1, 2 or 3. Cleaning → Dehusking → Whitener → Silky → Sortex → Grading, 4–6 hours per dryer batch.",
-    needsOutput: true,
+    needsOutput: false,
     mode: "generic",
     note: "Mixing paddy from different dryers in one milling batch needs a production manager's authorisation.",
   },

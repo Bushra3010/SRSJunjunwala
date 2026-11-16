@@ -10,6 +10,7 @@ import { errorMessage } from "@/lib/format";
 const HINDI_ERRORS: [RegExp, string][] = [
   [/NOTHING_IN_FEED_TANK/, "इस फीड टैंक में धान नहीं है"],
   [/PERMISSION_DENIED|not allowed/i, "आपकी भूमिका को यह कार्य करने की अनुमति नहीं है"],
+  [/NO_RECOVERY_STANDARD/, "इस किस्म का मानक रिकवरी सेट नहीं है — मैनेजर से सेट करवाएँ"],
   [/Enter the output/i, "चावल का आउटपुट (क्विंटल) भरें"],
   [/Output must be greater/i, "आउटपुट शून्य से अधिक होना चाहिए"],
   [/cannot exceed the input/i, "आउटपुट इनपुट से अधिक नहीं हो सकता"],
@@ -64,23 +65,22 @@ export async function millStart(fd: FormData) {
   go(path, { notice: `फीड टैंक ${n} से मिलिंग शुरू (${b?.batch_no}) / Milling started from Feed Tank ${n} (${b?.batch_no})` });
 }
 
-/** Stop milling: the rice output (quintals) is required. */
+/** Stop milling: the rice output is calculated from the variety's standard recovery (operators do not weigh it). */
 export async function millStop(fd: FormData) {
   const path = backPath(fd);
-  const raw = str(fd, "output_q");
-  const q = Number(raw);
-  if (!raw || !Number.isFinite(q) || q <= 0) fail(path, "Enter the rice output in quintals");
   const supabase = await createClient();
   const { error } = await supabase.rpc("complete_production_batch", {
     p_id: str(fd, "id"),
-    p_output_kg: Math.round(q * 100 * 100) / 100,
+    p_output_kg: null,
     p_rejected_kg: 0,
     p_moisture_pct: null,
     p_ended_at: null,
     p_remarks: null,
   });
   if (error) fail(path, error);
-  go(path, { notice: `${str(fd, "batch_no")} मिलिंग बंद, आउटपुट ${q} क्विंटल / Milling stopped, output ${q} q` });
+  const { data: b } = await supabase.from("production_batches").select("output_kg").eq("id", str(fd, "id")).single();
+  const q = (Number(b?.output_kg ?? 0) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  go(path, { notice: `${str(fd, "batch_no")} मिलिंग बंद, मानक से चावल लगभग ${q} क्विंटल / Milling stopped, rice output about ${q} q from the standard` });
 }
 
 /** Fault report for a mill machine. The machine is kept at the start of the description. */

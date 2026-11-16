@@ -665,6 +665,31 @@ async function main() {
   const stdAudit = await one(db, "select count(*) as n from public.audit_log where table_name = 'variety_output_standards'");
   check("standard changes are audited", Number(stdAudit.n) >= 2);
 
+  // Milling output from the standard recovery (client, 16 Nov): the operator does not enter it.
+  console.log("\nMilling output from the standard recovery");
+  const M2in = Number((await batch(mill2)).input_kg);
+  const est1 = await as(users.milling_operator, (tx) => one(tx, "select public.milling_standard_output_kg($1) as kg", [mill2]));
+  check("standard output = input x the variety's rice-grade standards (31%)", Number(est1.kg) === Math.round(M2in * 31) / 100, `${est1.kg} vs ${M2in}`);
+  await as(users.production_manager, (tx) => tx.query("delete from public.variety_output_standards where variety_id = $1", [ids.IR64]));
+  const yieldPct = Number((await one(db, "select est_yield_pct from public.varieties where id = $1", [ids.IR64])).est_yield_pct);
+  const est2 = await as(users.milling_operator, (tx) => one(tx, "select public.milling_standard_output_kg($1) as kg", [mill2]));
+  check("no standard set: falls back to the variety's estimated yield %", Number(est2.kg) === Math.round(M2in * yieldPct) / 100, `${est2.kg} ${yieldPct}%`);
+  await as(users.production_manager, (tx) => tx.query(
+    "insert into public.variety_output_standards (variety_id, grade_id, std_pct) values ($1, $2, 31)", [ids.IR64, grade.WAND1]));
+  await as(users.milling_operator, (tx) => tx.query("select public.complete_production_batch($1, null, 0, null, '2026-10-16 17:00+05:30')", [mill2]));
+  const M2done = await batch(mill2);
+  check("milling stops without an output: calculated from the standard and marked as an estimate",
+    M2done.status === "completed" && Number(M2done.output_kg) === Number(est1.kg) && M2done.output_qty_status === "estimated", `${M2done.output_kg} ${M2done.output_qty_status}`);
+  const m2ev = await one(db, "select note from public.batch_events where batch_id = $1 and event_type = 'completed'", [mill2]);
+  check("timeline says the rice output came from the standard", /standard recovery/.test(m2ev.note ?? ""), m2ev.note);
+  await stopDryer(dPair, 13, "2026-10-18 10:00+05:30");
+  const mill3 = (await as(users.milling_operator, (tx) => one(tx, "select public.start_milling_from_dryer(1, $1, '2026-10-18 11:00+05:30') as id", [eq["MILL-1"]]))).id;
+  await expectError("mixed-variety batch with no clear variety: asks for the output instead of guessing", users.milling_operator,
+    (tx) => tx.query("select public.complete_production_batch($1, null, 0, null, '2026-10-18 15:00+05:30')", [mill3]), /NO_RECOVERY_STANDARD/);
+  await as(users.milling_operator, (tx) => tx.query("select public.complete_production_batch($1, 20000, 0, null, '2026-10-18 15:00+05:30')", [mill3]));
+  const M3 = await batch(mill3);
+  check("an entered output is still accepted and marked as entered", Number(M3.output_kg) === 20000 && M3.output_qty_status === "entered", M3.output_qty_status);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

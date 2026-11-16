@@ -259,8 +259,8 @@ export function CompleteForm({ batch, back, needsOutput, moisture = false }: { b
         <input type="hidden" name="batch_no" value={batch.batch_no} />
         <input type="hidden" name="back" value={back} />
         <div>
-          <label className="label">Output (q){needsOutput ? "" : " — blank = estimate"}</label>
-          <input name="output_q" type="number" step="0.01" min="0.01" className="input" required={needsOutput} placeholder={needsOutput ? "" : (Number(batch.input_kg) / 100).toFixed(2)} />
+          <label className="label">Output (q){needsOutput ? "" : batch.stage === "milling" ? " — blank = from the standard recovery" : " — blank = estimate"}</label>
+          <input name="output_q" type="number" step="0.01" min="0.01" className="input" required={needsOutput} placeholder={needsOutput ? "" : batch.stage === "milling" ? "from standard" : (Number(batch.input_kg) / 100).toFixed(2)} />
         </div>
         <div>
           <label className="label">Rejected (q)</label>

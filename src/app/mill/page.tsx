@@ -124,6 +124,14 @@ export default async function MillPage({ searchParams }: { searchParams: Promise
     }
   }
   const runningFor = (n: number) => running.find((r) => tankOfBatch.get(r.id) === n);
+  // Expected rice output from the variety's standard recovery (null when no standard applies).
+  const estimate = new Map<string, number | null>();
+  await Promise.all(
+    running.map(async (r) => {
+      const { data, error } = await m.supabase.rpc("milling_standard_output_kg", { p_id: r.id });
+      estimate.set(r.id, error || data === null ? null : Number(data));
+    }),
+  );
   const millBusy = running.length > 0;
   const faults = (faultsRes.data ?? []) as { id: string; equipment_id: string | null; description: string; started_at: string; ended_at: string | null }[];
   const back = "/mill";
@@ -234,22 +242,23 @@ export default async function MillPage({ searchParams }: { searchParams: Promise
                       <input type="hidden" name="batch_no" value={run?.batch_no ?? ""} />
                       <input type="hidden" name="back" value={back} />
                       {run && (
-                        <label className="grid gap-1 text-left text-[12px] font-bold">
-                          <span>चावल आउटपुट (क्विंटल) / Rice output (q)</span>
-                          <input
-                            name="output_q"
-                            type="number"
-                            inputMode="decimal"
-                            step="0.01"
-                            min="0.01"
-                            required
-                            disabled={!canMill}
-                            className="input min-h-11 text-[16px]"
-                            placeholder="जैसे / e.g. 65"
-                          />
-                        </label>
+                        <p className={`rounded-lg px-2 py-1.5 text-[12px] font-bold ${estimate.get(run.id) ? "bg-[#f3f6fb] text-[#334155]" : "bg-[#fdecec] text-[#a11a1a]"}`}>
+                          {estimate.get(run.id) ? (
+                            <>
+                              अनुमानित चावल ~{qtl(estimate.get(run.id))} क्विंटल (मानक से)
+                              <br />
+                              Est. rice output ~{qtl(estimate.get(run.id))} q (from standard)
+                            </>
+                          ) : (
+                            <>
+                              इस किस्म का मानक सेट नहीं है — मैनेजर से सेट करवाएँ
+                              <br />
+                              No standard set for this variety — ask the manager
+                            </>
+                          )}
+                        </p>
                       )}
-                      <PressButton tone="stop" disabled={!canMill || !run} pendingText="रुकिए… / Saving…">
+                      <PressButton tone="stop" disabled={!canMill || !run || !estimate.get(run.id)} pendingText="रुकिए… / Saving…">
                         <Square className="size-5 fill-white" />
                         <Bi hi="बंद करें" en="Stop" className="text-left" />
                       </PressButton>
