@@ -10,6 +10,7 @@ import { FAULT_REPORTERS, STAGE_OPERATORS } from "@/lib/roles";
 import { equipmentState, loadMasters, q, type Batch } from "@/lib/production";
 import { reportFault, startDryer, startSoakingStandard, stopDryer, stopSoaking } from "@/app/(app)/production/actions";
 import { Clock, OnlineStatus, PressButton } from "./floor-client";
+import { OpenFaults } from "./open-faults";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Dryer Section · SRS Factory" };
@@ -45,7 +46,10 @@ export default async function FloorPage({ searchParams }: { searchParams: Promis
   ]);
   const unloaded = ((unloadedRes.data ?? []) as UnloadedRow[]).filter((r) => r.std_tank_kg);
   const filling = new Map(((fillRes.data ?? []) as { dryer_id: string; lots: number; tanks?: number; filling_kg: number; first_at: string }[]).map((f) => [f.dryer_id, f]));
-  const faults = (faultsRes.data ?? []) as { id: string; equipment_id: string | null; severity: string; description: string; started_at: string }[];
+  const millLine = new Set(m.equipment.filter((e) => e.kind === "mill_line").map((e) => e.id));
+  const faults = ((faultsRes.data ?? []) as { id: string; equipment_id: string | null; severity: string; description: string; started_at: string }[]).filter(
+    (f) => !f.equipment_id || !millLine.has(f.equipment_id),
+  );
 
   const dryerInfo = dryers.map((d) => {
     const s = dryerState.get(d.id);
@@ -80,7 +84,10 @@ export default async function FloorPage({ searchParams }: { searchParams: Promis
 
   return (
     <div className="min-h-dvh bg-[#eef1f6] pb-10 text-[#0f1f3d]">
-      <LiveRefresh />
+      {/* Keeps the screen updated when data changes; the badge itself is not shown here. */}
+      <div className="hidden">
+        <LiveRefresh />
+      </div>
       {/* Header */}
       <header className="sticky top-0 z-20 border-b border-[#d7dde8] bg-[#f8f6f1]/95 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2.5">
@@ -159,22 +166,21 @@ export default async function FloorPage({ searchParams }: { searchParams: Promis
                 <TriangleAlert className="size-5" /> Send fault report
               </PressButton>
             </form>
-            {faults.length > 0 && (
-              <div className="mt-4 border-t border-[#f1d5d6] pt-3">
-                <h3 className="mb-2 text-[13px] font-extrabold text-[#475569]">Open faults ({faults.length})</h3>
-                <ul className="space-y-2">
-                  {faults.map((f) => (
-                    <li key={f.id} className="rounded-xl bg-[#fdf3f3] px-3 py-2 text-[13px]">
-                      <b>{f.equipment_id ? m.equipmentById.get(f.equipment_id)?.name : "General"}</b> · <span className="capitalize">{f.severity}</span> · since {clock(f.started_at)}
-                      <div className="text-[#475569]">{f.description}</div>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 text-[12px] text-[#64748b]">The production manager closes faults on the Production → Faults page.</p>
-              </div>
-            )}
           </section>
         )}
+
+        <div className="mb-5">
+          <OpenFaults
+            back={back}
+            canFix={canFault}
+            faults={faults.map((f) => ({
+              id: f.id,
+              machine: f.equipment_id ? (m.equipmentById.get(f.equipment_id)?.name ?? "Machine") : "General",
+              details: f.description,
+              started_at: f.started_at,
+            }))}
+          />
+        </div>
 
         {/* Phone: switch between the two panels. Wide screens show both side by side. */}
         <nav className="mb-4 grid grid-cols-2 gap-1 rounded-2xl bg-white p-1 shadow-sm lg:hidden" aria-label="Section">

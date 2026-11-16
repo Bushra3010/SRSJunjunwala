@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 /** Live date and time (IST) for the operator header. */
-export function Clock() {
+export function Clock({ hindi = false }: { hindi?: boolean }) {
   const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
     setNow(new Date());
@@ -16,6 +16,7 @@ export function Clock() {
   return (
     <div className="leading-tight">
       <div className="text-[11px] font-semibold text-[#475569] sm:text-[13px]">
+        {hindi && <>{now.toLocaleDateString("hi-IN", { ...tz, weekday: "short", day: "numeric", month: "short" })} / </>}
         {now.toLocaleDateString("en-IN", { ...tz, weekday: "short", day: "numeric", month: "short" })}
       </div>
       <div className="text-[18px] font-extrabold tabular-nums text-[#0f1f3d] sm:text-[24px]">
@@ -26,7 +27,7 @@ export function Clock() {
 }
 
 /** Online / offline pill from the browser's network state. */
-export function OnlineStatus() {
+export function OnlineStatus({ hindi = false }: { hindi?: boolean }) {
   const [online, setOnline] = useState(true);
   useEffect(() => {
     const update = () => setOnline(navigator.onLine);
@@ -45,6 +46,7 @@ export function OnlineStatus() {
     >
       <span className={`size-2 rounded-full ${online ? "bg-[#0a8f44]" : "bg-[#d10b0b]"}`} />
       {online ? "Online" : "Offline"}
+      {hindi && <span className="font-semibold">{online ? "ऑनलाइन" : "ऑफलाइन"}</span>}
     </span>
   );
 }
@@ -56,12 +58,14 @@ export function PressButton({
   disabled,
   form,
   className = "",
+  pendingText = "Saving…",
 }: {
   children: React.ReactNode;
   tone: "start" | "stop" | "navy";
   disabled?: boolean;
   form?: string;
   className?: string;
+  pendingText?: string;
 }) {
   const { pending } = useFormStatus();
   const colors = {
@@ -75,7 +79,7 @@ export function PressButton({
       disabled={disabled || pending}
       className={`flex min-h-12 w-full items-center justify-center gap-2 rounded-xl px-3 text-[15px] font-bold text-white shadow-sm transition ${colors} disabled:cursor-not-allowed disabled:bg-[#cbd2dc] disabled:text-[#6b7280] disabled:shadow-none ${className}`}
     >
-      {pending ? "Saving…" : children}
+      {pending ? pendingText : children}
     </button>
   );
 }
