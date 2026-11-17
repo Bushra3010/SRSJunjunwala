@@ -60,6 +60,7 @@ const MODULE_LABELS: Record<NavKey, string> = {
   inventory: "Inventory",
   stores: "Stores & Repairs",
   reports: "Reports",
+  accounts: "Accounts",
   admin: "Admin",
 };
 

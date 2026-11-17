@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ClipboardList,
   Cog,
+  Landmark,
   FlaskConical,
   LayoutDashboard,
   LogOut,
@@ -55,6 +56,24 @@ const SECTIONS: { title: string; items: Item[] }[] = [
     items: [
       { key: "purchase-orders", href: "/purchase-orders", label: "Purchase Orders", icon: ClipboardList },
       { key: "sales-orders", href: "/sales-orders", label: "Sales Orders", icon: ShoppingCart },
+    ],
+  },
+  {
+    title: "Accounts",
+    items: [
+      {
+        key: "accounts",
+        href: "/accounts",
+        label: "Accounts",
+        icon: Landmark,
+        children: [
+          { key: "accounts", href: "/accounts", label: "Outstanding" },
+          { key: "accounts", href: "/accounts/ledger", label: "Party ledgers" },
+          { key: "accounts", href: "/accounts/payments", label: "Payments & receipts" },
+          { key: "accounts", href: "/accounts/tally", label: "Tally export" },
+          { key: "accounts", href: "/accounts/settings", label: "Tally settings" },
+        ],
+      },
     ],
   },
   {

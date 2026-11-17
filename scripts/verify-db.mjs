@@ -690,6 +690,108 @@ async function main() {
   const M3 = await batch(mill3);
   check("an entered output is still accepted and marked as entered", Number(M3.output_kg) === 20000 && M3.output_qty_status === "entered", M3.output_qty_status);
 
+  // =========================================================================
+  {
+  // Accounts and Tally export (client, 17 Nov).
+  console.log("\nAccounts: ledgers, payments, Tally export");
+  {
+    const id = randomUUID();
+    users.accountant = id;
+    await db.query("insert into auth.users (id, email) values ($1, 'accountant@test.local')", [id]);
+    await db.query("update public.profiles set role = 'accountant', plant_id = $2 where id = $1", [id, PLANT]);
+  }
+  const vouchers = (who) => as(who, (tx) => all(tx, "select * from public.accounting_vouchers(null, null)"));
+  check("operators cannot see accounts", (await vouchers(users.qc_unloading)).length === 0);
+  // A truck through a broker, without a purchase order (so no rate yet).
+  const brk = await one(db, "insert into public.brokers (name) values ('Test Broker') returning id");
+  const truckB = await as(users.weighbridge_operator, (tx) =>
+    one(tx, `insert into public.weighbridge_tickets (plant_id, rst, vehicle_no, direction, gross_kg, weighed_at)
+             values ($1, 501, 'HR 55 AC 5010', 'inbound', 28000, '2026-10-20 08:00+05:30') returning *`, [PLANT]));
+  await as(users.weighbridge_operator, (tx) => tx.query("select public.complete_weighing($1, null, 12000)", [truckB.id]));
+  const qB = (await as(users.qc_unloading, (tx) => one(tx, "select public.start_qc_inbound($1) as id", [truckB.id]))).id;
+  await as(users.qc_unloading, async (tx) => {
+    await tx.query("update public.qc_inbound set supplier_id = $2, broker_id = $3, location_id = $4 where id = $1", [qB, party["Kaveri Agro"], brk.id, loc["YARD-A"]]);
+    await tx.query("insert into public.qc_inbound_lines (qc_id, line_no, variety_id, moisture_pct, sacks_received) values ($1, 1, $2, 14, 320)", [qB, ids.IR64]);
+    await tx.query("select public.submit_qc_inbound($1)", [qB]);
+  });
+  await as(users.qc_head, (tx) => tx.query("select public.post_qc_inbound($1)", [qB]));
+  const lineB = await one(db, "select id, accepted_kg from public.qc_inbound_lines where qc_id = $1", [qB]);
+  let vs = await vouchers(users.accountant);
+  const pur = () => vs.find((v) => v.voucher_key === "PUR:" + qB);
+  check("posted truck without a PO appears as a Purchase needing a rate", pur()?.vtype === "Purchase" && pur()?.problem === "Rate missing" && pur()?.party_name === "Kaveri Agro", JSON.stringify(pur()));
+  await expectError("operators cannot fill rates", users.qc_unloading,
+    (tx) => tx.query("select public.set_voucher_override('purchase', $1, null, 2400)", [lineB.id]), /PERMISSION_DENIED/);
+  await as(users.accountant, (tx) => tx.query("select public.set_voucher_override('purchase', $1, null, 2400)", [lineB.id]));
+  vs = await vouchers(users.accountant);
+  const purAmt = Math.round(Number(lineB.accepted_kg) / 100 * 2400 * 100) / 100;
+  check("purchase amount = accepted q x rate, ready for Tally", pur()?.problem === null && Number(pur()?.amount) === purAmt, `${pur()?.amount} vs ${purAmt}`);
+  check("no broker commission until a rate is set", !vs.some((v) => v.voucher_key === "BRK:" + qB));
+  await as(users.accountant, (tx) => tx.query("select public.set_tally_ledger(null, $1, 'Test Broker A/c', 5)", [brk.id]));
+  vs = await vouchers(users.accountant);
+  const bv = vs.find((v) => v.voucher_key === "BRK:" + qB);
+  check("broker commission Journal = accepted q x Rs 5", bv?.vtype === "Journal" && Number(bv.amount) === Math.round(Number(lineB.accepted_kg) / 100 * 5 * 100) / 100 && bv.ledger_name === "Test Broker A/c", JSON.stringify(bv));
+  // Sales: the dispatch posted earlier has sales-order lines (customer known) but no rate.
+  const sal = vs.find((v) => v.voucher_key.startsWith("SAL:" + oq));
+  check("posted dispatch appears as a Sales voucher with the customer from the sales order", sal?.vtype === "Sales" && sal?.problem === "Rate missing" && !!sal?.party_id, JSON.stringify(sal));
+  for (const l of await all(db, "select id from public.qc_outbound_lines where qc_id = $1", [oq])) {
+    await as(users.accountant, (tx) => tx.query("select public.set_voucher_override('sales', $1, null, 3200)", [l.id]));
+  }
+  vs = await vouchers(users.accountant);
+  const sal2 = vs.find((v) => v.voucher_key.startsWith("SAL:" + oq));
+  check("sales amount = qty x rate once rates are filled", sal2?.problem === null && Number(sal2.amount) > 0, JSON.stringify(sal2));
+  // Payments.
+  const bank = await as(users.accountant, (tx) => one(tx, "insert into public.bank_accounts (name, tally_ledger, account_last4) values ('HDFC Current', 'HDFC Bank', '1234') returning id"));
+  const pay = (args) => as(users.accountant, (tx) => one(tx, "select public.record_payment($1, $2, $3, $4, $5, $6, $7, $8, null, $9) as id", args)).then((r) => r.id);
+  await expectError("NEFT payment needs the UTR", users.accountant,
+    (tx) => tx.query("select public.record_payment('payment', $1, null, $2, 100000, '2026-10-21', 'NEFT', null)", [party["Kaveri Agro"], bank.id]), /reference/);
+  await expectError("cash entries cannot use a bank account", users.accountant,
+    (tx) => tx.query("select public.record_payment('payment', $1, null, $2, 1000, '2026-10-21', 'Cash', null)", [party["Kaveri Agro"], bank.id]), /Cash entries/);
+  await expectError("receipts cannot be from a broker", users.accountant,
+    (tx) => tx.query("select public.record_payment('receipt', null, $1, $2, 1000, '2026-10-21', 'NEFT', 'X1')", [brk.id, bank.id]), /brokers/);
+  await expectError("management can view but not record payments", users.management,
+    (tx) => tx.query("select public.record_payment('payment', $1, null, $2, 1000, '2026-10-21', 'NEFT', 'X2')", [party["Kaveri Agro"], bank.id]), /PERMISSION_DENIED/);
+  const req = randomUUID();
+  const p1 = await pay(["payment", party["Kaveri Agro"], null, bank.id, 100000, "2026-10-21", "NEFT", "UTR123", req]);
+  const p1again = await pay(["payment", party["Kaveri Agro"], null, bank.id, 100000, "2026-10-21", "NEFT", "UTR123", req]);
+  check("payment recorded once even if the button is pressed twice", p1 === p1again && /^PAY-\d{5}$/.test((await one(db, "select voucher_no from public.payments where id = $1", [p1])).voucher_no));
+  const led = await as(users.management, (tx) => all(tx, "select * from public.party_ledger($1, null)", [party["Kaveri Agro"]]));
+  const purRow = led.find((r) => r.voucher_key === "PUR:" + qB);
+  const payRow = led.find((r) => r.voucher_key === "PAY:" + p1);
+  const last = led.at(-1);
+  const expectBal = led.reduce((a, r) => a + Number(r.debit) - Number(r.credit), 0);
+  check("party ledger: purchase is a credit, payment a debit, running balance adds up",
+    Number(purRow?.credit) === purAmt && Number(payRow?.debit) === 100000 && Math.abs(Number(last.balance) - expectBal) < 0.01, JSON.stringify({ purRow, payRow, last }));
+  const bal = await as(users.management, (tx) => one(tx, "select * from public.party_balances() where party_id = $1", [party["Kaveri Agro"]]));
+  check("outstanding per party matches the ledger", Math.abs(Number(bal.balance) - expectBal) < 0.01, bal.balance);
+  // Export to Tally.
+  const keys = ["PUR:" + qB, "BRK:" + qB, sal2.voucher_key, "PAY:" + p1, "PUR:does-not-exist"];
+  const ex = (await as(users.accountant, (tx) => one(tx, "select public.mark_tally_exported($1::text[], '2026-10-01', '2026-10-31') as id", [keys]))).id;
+  const EX = await one(db, "select * from public.tally_exports where id = $1", [ex]);
+  check("export logs only the ready entries (4 of 5 keys)", EX.voucher_count === 4 && /^TLY-\d{5}$/.test(EX.export_no), JSON.stringify(EX));
+  await expectError("the same entries cannot be exported twice", users.accountant,
+    (tx) => tx.query("select public.mark_tally_exported($1::text[], null, null)", [keys]), /NOTHING_TO_EXPORT/);
+  vs = await vouchers(users.accountant);
+  check("exported entries show their export number", vs.filter((v) => keys.includes(v.voucher_key)).every((v) => v.export_no === EX.export_no));
+  await expectError("rates cannot change after export", users.accountant,
+    (tx) => tx.query("select public.set_voucher_override('purchase', $1, null, 2500)", [lineB.id]), /ALREADY_EXPORTED/);
+  await as(users.accountant, (tx) => tx.query("select public.cancel_payment($1, 'Entered twice')", [p1]));
+  vs = await vouchers(users.accountant);
+  const cp = vs.find((v) => v.voucher_key === "PAY:" + p1);
+  check("a payment cancelled after export stays listed as cancelled (so Tally can be corrected)", cp?.source_status === "cancelled" && cp?.export_no === EX.export_no);
+  const led2 = await as(users.accountant, (tx) => all(tx, "select * from public.party_ledger($1, null)", [party["Kaveri Agro"]]));
+  check("cancelled payment drops out of the party ledger", !led2.some((r) => r.voucher_key === "PAY:" + p1));
+  await as(users.admin, (tx) => tx.query("delete from public.payments where id = $1", [p1]));
+  {
+    let msg = "";
+    try { await db.query("delete from public.payments where id = $1", [p1]); } catch (e) { msg = e.message; }
+    check("payments cannot be deleted even by the database owner", /cannot be deleted/.test(msg), msg);
+  }
+  check("payments cannot be deleted (still there after a delete attempt)", !!(await one(db, "select id from public.payments where id = $1", [p1])));
+  await expectError("operators cannot read payments", users.qc_unloading,
+    async (tx) => { const r = await all(tx, "select * from public.payments"); if (!r.length) throw new Error("row-level: none visible"); }, /row-level/);
+
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

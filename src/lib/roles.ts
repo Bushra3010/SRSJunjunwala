@@ -13,6 +13,7 @@ export const ROLES = [
   "steaming_operator",
   "drying_operator",
   "milling_operator",
+  "accountant",
 ] as const;
 
 export type Role = (typeof ROLES)[number];
@@ -32,6 +33,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   steaming_operator: "Steaming operator",
   drying_operator: "Drying operator",
   milling_operator: "Milling operator",
+  accountant: "Accountant",
 };
 
 export type NavKey =
@@ -44,6 +46,7 @@ export type NavKey =
   | "inventory"
   | "stores"
   | "reports"
+  | "accounts"
   | "admin";
 
 /** Which roles may open each module (PRD §9). Enforced again by RLS in the database. */
@@ -57,6 +60,7 @@ export const NAV_ACCESS: Record<NavKey, Role[]> = {
   inventory: ["admin", "management", "qc_head"],
   stores: ["admin", "management", "store_custodian"],
   reports: ["admin", "management", "qc_head", "commercial"],
+  accounts: ["admin", "management", "accountant", "commercial"],
   admin: ["admin", "management"],
 };
 
@@ -65,6 +69,8 @@ export function canAccess(role: Role | null | undefined, key: NavKey) {
 }
 
 export const QC_REVIEWERS: Role[] = ["admin", "qc_head"];
+/** Who may record payments, fill rates and export to Tally. Mirrors can_edit_accounts() in the database. */
+export const ACCOUNT_EDITORS: Role[] = ["admin", "accountant"];
 export const ORDER_EDITORS: Role[] = ["admin", "management", "commercial"];
 export const TICKET_CAPTURERS: Role[] = ["admin", "management", "weighbridge_operator"];
 export const TICKET_RESOLVERS: Role[] = ["admin", "management", "qc_head"];
