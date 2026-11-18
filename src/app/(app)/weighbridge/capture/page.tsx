@@ -54,6 +54,15 @@ export default async function CaptureTicketPage({ searchParams }: { searchParams
             <label className="label" htmlFor="ticket_ref">Original ticket reference</label>
             <input id="ticket_ref" name="ticket_ref" className="input" placeholder="As printed on the slip" />
           </div>
+          <div>
+            <label className="label" htmlFor="vehicle_type">Vehicle type</label>
+            <input id="vehicle_type" name="vehicle_type" className="input" list="vehicle-types" placeholder="Truck, tractor trolley…" />
+            <datalist id="vehicle-types">
+              {["Truck", "Tractor trolley", "DCM / Canter", "Pickup", "Trailer"].map((v) => (
+                <option key={v} value={v} />
+              ))}
+            </datalist>
+          </div>
           <div className="sm:col-span-2">
             <label className="label" htmlFor="source_payload">SMS text / remarks</label>
             <textarea id="source_payload" name="source_payload" rows={2} className="input" placeholder="Paste the weighbridge SMS if available" />

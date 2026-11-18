@@ -18,6 +18,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  ReceiptText,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -74,6 +75,16 @@ const SECTIONS: { title: string; items: Item[] }[] = [
           { key: "accounts", href: "/accounts/settings", label: "Tally settings" },
         ],
       },
+      {
+        key: "purchase-slips",
+        href: "/purchase-slips",
+        label: "Purchase slips",
+        icon: ReceiptText,
+        children: [
+          { key: "purchase-slips", href: "/purchase-slips", label: "All slips" },
+          { key: "admin", href: "/purchase-slips/settings", label: "Slip parameters" },
+        ],
+      },
     ],
   },
   {
@@ -108,6 +119,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
 const SHORTCUTS: { key: NavKey; href: string; label: string; dot: string }[] = [
   { key: "weighbridge", href: "/weighbridge?tab=exceptions", label: "Ticket exceptions", dot: "#d10b0b" },
   { key: "qc", href: "/qc", label: "QC work queue", dot: "#0a8f44" },
+  { key: "qc", href: "/purchase-qc", label: "Purchase QC (phone)", dot: "#13284b" },
   { key: "weighbridge", href: "/weighbridge?tab=cycles", label: "RST cycles", dot: "#d8a242" },
   { key: "processing", href: "/production/trace", label: "Trace a batch", dot: "#3e6fc0" },
 ];

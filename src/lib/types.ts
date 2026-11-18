@@ -14,6 +14,7 @@ export type Ticket = {
   cycle_id: string | null;
   rst: number;
   vehicle_no: string;
+  vehicle_type?: string | null;
   direction: "inbound" | "outbound";
   gross_kg: number | null;
   tare_kg: number | null;

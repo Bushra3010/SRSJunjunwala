@@ -26,6 +26,8 @@ export async function middleware(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims ?? null;
 
+  // The slip link sent to brokers opens without signing in (it only shows one slip, by its long random token).
+  if (request.nextUrl.pathname.startsWith("/slip/")) return response;
   const isLogin = request.nextUrl.pathname.startsWith("/login");
   // API callers get a JSON 401 instead of a redirect to the sign-in page.
   if (!user && request.nextUrl.pathname.startsWith("/api/")) {

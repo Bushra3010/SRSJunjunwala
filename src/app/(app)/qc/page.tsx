@@ -57,7 +57,15 @@ export default async function QcPage({ searchParams }: { searchParams: Promise<S
 
   return (
     <>
-      <PageHeader title="Quality Control" description="Find the truck by RST, confirm it, and record QC at the unloading or loading point." />
+      <PageHeader
+        title="Quality Control"
+        description="Find the truck by RST, confirm it, and record QC at the unloading or loading point."
+        actions={
+          <Link href="/purchase-qc" className="btn-primary">
+            Purchase QC (phone)
+          </Link>
+        }
+      />
       <Flash error={sp.error} notice={sp.notice} />
       <Tabs
         active={tab}

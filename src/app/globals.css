@@ -120,3 +120,33 @@ body {
   background-image: radial-gradient(rgba(32, 44, 75, 0.4) 1px, transparent 1.3px);
   background-size: 5px 5px;
 }
+
+/* ---- Printing: only the purchase slip -------------------------------------- */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+  html,
+  body {
+    background: #fff !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  .slip-doc,
+  .slip-doc * {
+    visibility: visible;
+  }
+  .slip-doc {
+    position: absolute;
+    inset: 0 0 auto 0;
+    max-width: none;
+    padding: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

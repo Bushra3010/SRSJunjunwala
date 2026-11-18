@@ -20,6 +20,7 @@ const MODULES: Record<NavKey, string> = {
   stores: "Stores & Repairs",
   reports: "Reports",
   accounts: "Accounts",
+  "purchase-slips": "Purchase slips",
   admin: "Admin",
 };
 

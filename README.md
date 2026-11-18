@@ -15,7 +15,9 @@ Next.js 15 (App Router) + Supabase (Postgres, Auth, RLS). Built from `../PRD_SRS
 | Admin dashboard | ✅ | Live figures from `admin_dashboard()` (admin/management only) |
 | Real-time | ✅ | Pages refresh automatically via Supabase Realtime when tickets, QC, orders or stock change |
 | Admin | ✅ | Users & roles, masters, calculation settings, audit trail |
-| Processing, Stores & Repairs, Reports, Notifications, SMS ingest | ⏳ | Phase 3–4 placeholders |
+| Accounts | ✅ | Party ledgers, payments & receipts, TallyPrime export |
+| Purchase QC + purchase slip | ✅ | Phone screen `/purchase-qc` (RST/sauda search, moisture, bags received/returned, claim, godown). Posting the QC builds the slip automatically; Khad filled in later; admin/accountant edit, finalise, pay; print; WhatsApp to broker (manual link, or automatic via the WhatsApp Business API). Parameters in `/purchase-slips/settings` |
+| Stores & Repairs, Reports, Notifications, SMS ingest | ⏳ | Phase 3–4 placeholders |
 
 ### Integrity rules (PRD §2.2, §9)
 - RST is never a key. Every record has a permanent `PID-xxxxxx`; tickets belong to an **RST cycle**.
@@ -68,3 +70,14 @@ After that, an admin can add users from **Admin → Users & roles**. That needs 
 1. **Weighbridge → RST cycles**: start the current RST cycle.
 2. **Admin → Masters**: add varieties, suppliers/customers, brokers and locations.
 3. **Admin → Users & roles**: add staff accounts.
+
+## Purchase slip — WhatsApp Business API (automatic sending)
+
+Manual sending (opens WhatsApp with the slip text and link) works without setup. For automatic sending after payment:
+
+1. In Meta Business Manager, set up WhatsApp Business (Cloud API) for the factory number.
+2. Create and get approved a template named `purchase_slip` (language `en`) whose body has 5 values:
+   `{{1}}` slip no, `{{2}}` party, `{{3}}` RST · vehicle · date, `{{4}}` total payable, `{{5}}` link to the slip.
+3. Set on Vercel: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` (optional: `WHATSAPP_SLIP_TEMPLATE`, `WHATSAPP_TEMPLATE_LANG`,
+   `NEXT_PUBLIC_SITE_URL` for the link).
+4. Tick "Send automatically after payment" in Purchase slips → Slip parameters.

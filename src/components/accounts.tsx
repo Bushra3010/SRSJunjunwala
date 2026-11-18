@@ -5,6 +5,7 @@ export const ACCOUNT_TABS = [
   { key: "outstanding", label: "Outstanding", href: "/accounts" },
   { key: "ledger", label: "Party ledgers", href: "/accounts/ledger" },
   { key: "payments", label: "Payments & receipts", href: "/accounts/payments" },
+  { key: "slips", label: "Purchase slips", href: "/purchase-slips" },
   { key: "tally", label: "Tally export", href: "/accounts/tally" },
   { key: "settings", label: "Tally settings", href: "/accounts/settings" },
 ];

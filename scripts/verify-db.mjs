@@ -29,6 +29,8 @@ const GRANTS = `
   revoke execute on function public.set_ticket_status(uuid, public.ticket_status) from authenticated;
   revoke execute on function public.next_batch_no(public.production_stage) from authenticated;
   revoke execute on function public.refresh_batch_status(uuid) from authenticated;
+  revoke execute on function public.create_purchase_slip(uuid) from authenticated;
+  revoke execute on function public.slip_recalc(uuid) from authenticated;
 `;
 
 let passed = 0;
@@ -790,6 +792,138 @@ async function main() {
   await expectError("operators cannot read payments", users.qc_unloading,
     async (tx) => { const r = await all(tx, "select * from public.payments"); if (!r.length) throw new Error("row-level: none visible"); }, /row-level/);
 
+  }
+
+  console.log("\nPurchase slip (client sample: RST 139, Annapurna Trading Co, 01 Nov 2026)");
+  {
+    const v = await one(db, "insert into public.varieties (code, name) values ('HYB', 'Hybrid Paddy') returning id");
+    const ann = await one(db, "insert into public.parties (name, kind) values ('Annapurna Trading Co', 'supplier') returning id");
+    const sachin = await one(db, "insert into public.brokers (name, phone) values ('Sachin', '98765 43210') returning id");
+    const godown = await one(db, "insert into public.locations (plant_id, code, name, kind) values ($1, 'SFDJ', 'SFDJ', 'raw_store') returning id", [PLANT]);
+    const sauda = await as(users.commercial, async (tx) => {
+      const p = await one(tx, "insert into public.purchase_orders (plant_id, supplier_id, broker_id) values ($1, $2, $3) returning *", [PLANT, ann.id, sachin.id]);
+      const l = await one(tx, "insert into public.po_lines (po_id, line_no, variety_id, ordered_kg, rate_per_qtl) values ($1, 1, $2, 50000, 2175) returning *", [p.id, v.id]);
+      return { ...p, line: l.id };
+    });
+    const tk = await as(users.weighbridge_operator, (tx) =>
+      one(tx, `insert into public.weighbridge_tickets (plant_id, rst, vehicle_no, vehicle_type, direction, gross_kg, weighed_at)
+               values ($1, 139, 'TT', 'Tractor trolley', 'inbound', 16540, now() - interval '2 hours') returning *`, [PLANT]));
+    const found = await as(users.qc_unloading, (tx) => all(tx, "select * from public.purchase_qc_search('139')"));
+    check("purchaser finds the truck by RST with vehicle, gross and type",
+      found.some((r) => r.ticket_id === tk.id && Number(r.gross_kg) === 16540 && r.vehicle_type === "Tractor trolley"), JSON.stringify(found));
+    const bySauda = await as(users.qc_unloading, (tx) => all(tx, "select * from public.purchase_qc_search($1)", [sauda.po_no]));
+    check("…and by sauda (purchase order) number", bySauda.some((r) => r.ticket_id === tk.id));
+    check("operators outside QC get nothing from the search", (await as(users.foreman, (tx) => all(tx, "select * from public.purchase_qc_search('139')"))).length === 0);
+
+    const qid = (await as(users.qc_unloading, (tx) => one(tx, "select public.start_qc_inbound($1) as id", [tk.id]))).id;
+    await as(users.qc_unloading, async (tx) => {
+      await tx.query(`update public.qc_inbound set supplier_id = $2, broker_id = $3, location_id = $4, bag_status = 'returned',
+                      claim_details = '20q*30 paper & Palledari', claim_amount = 950 where id = $1`, [qid, ann.id, sachin.id, godown.id]);
+      await tx.query("insert into public.qc_inbound_lines (qc_id, line_no, variety_id, po_line_id, moisture_pct, sacks_received) values ($1, 1, $2, $3, 16.2, 275)", [qid, v.id, sauda.line]);
+      await tx.query("select public.submit_qc_inbound($1)", [qid]);
+    });
+    await as(users.weighbridge_operator, (tx) => tx.query("select public.complete_weighing($1, null, 5530)", [tk.id]));
+    await as(users.qc_head, (tx) => tx.query("select public.post_qc_inbound($1)", [qid]));
+
+    const slipOf = (who) => as(who, (tx) => one(tx, "select * from public.purchase_slips where qc_id = $1 and status <> 'cancelled'", [qid]));
+    const linesOf = (who, id) => as(who, (tx) => all(tx, "select * from public.purchase_slip_lines where slip_id = $1 order by sort_order", [id]))
+      .then((ls) => Object.fromEntries(ls.map((l) => [l.code ?? l.label, l])));
+    let S = await slipOf(users.accountant);
+    check("posting the QC builds the slip automatically", !!S && S.status === "draft" && /^PS-\d{5}$/.test(S.slip_no), JSON.stringify(S));
+    check("slip header: RST 139, TT, Hybrid Paddy, 275 bags, 110.10 q @ 2175 = 239468",
+      S.rst === 139 && S.vehicle_no === "TT" && S.variety === "Hybrid Paddy" && S.bags_total === 275 && Number(S.net_kg) === 11010 &&
+      Number(S.rate_per_qtl) === 2175 && Number(S.amount) === 239468, JSON.stringify(S));
+    let L = await linesOf(users.accountant, S.id);
+    check("Khad waits to be entered after unloading", L.khad?.pending === true && Number(L.khad.amount) === 0);
+    await expectError("slip cannot be finalised while Khad is pending", users.accountant,
+      (tx) => tx.query("select public.finalize_purchase_slip($1)", [S.id]), /Khad/);
+    await expectError("an unloading QC operator cannot enter Khad", users.qc_unloading,
+      (tx) => tx.query("select public.enter_slip_deduction($1, 1)", [L.khad.id]), /PERMISSION_DENIED|not found/);
+    await as(users.management, (tx) => tx.query("select public.enter_slip_deduction($1, 1, 'next day')", [L.khad.id]));
+    S = await slipOf(users.accountant);
+    L = await linesOf(users.accountant, S.id);
+    const amt = (c) => Number(L[c]?.amount);
+    check("deductions match the paper slip: CD 4789, Khad 2395, moisture 479, dhalta 2395, brokerage 771, claim 950, unloading 1101, TDS 239, RTGS 200",
+      amt("cash_discount") === 4789 && amt("khad") === 2395 && amt("moisture") === 479 && Number(L.moisture.rate) === 0.2 &&
+      amt("dhalta") === 2395 && Number(L.dhalta.rate) === 1 && amt("brokerage") === 771 && amt("claim") === 950 &&
+      amt("unloading") === 1101 && amt("tds") === 239 && amt("rtgs") === 200, JSON.stringify(Object.values(L).map((l) => [l.code, l.rate, l.amount])));
+    check("net payable 226149 (as on the paper slip)", Number(S.net_payable) === 226149, S.net_payable);
+
+    // Moisture bands.
+    const mp = async (m, prog, pass = 16) => Number((await one(db, "select public.slip_moisture_pct($1, $2::jsonb) as p",
+      [m, JSON.stringify({ moisture_pass_pct: pass, moisture_progressive: prog, moisture_slabs: [{ upto: 20, per_point: 1 }, { upto: 24, per_point: 1.5 }, { upto: null, per_point: 2 }] })])).p);
+    check("moisture: up to 16% passes", (await mp(16, 1)) === 0 && (await mp(15.5, 1)) === 0);
+    check("moisture 22%: 7% band by band, 9% at the band rate", (await mp(22, 1)) === 7 && (await mp(22, 0)) === 9);
+    check("moisture 26%: 4 + 6 + 4 = 14% band by band", (await mp(26, 1)) === 14);
+    check("moisture with pass level 14%: 16.2% = 2.2%", (await mp(16.2, 1, 14)) === 2.2);
+
+    // Edits.
+    await expectError("only admin / accountant can edit a slip", users.management,
+      (tx) => tx.query("select public.update_purchase_slip($1, '{\"early_payment\": true}'::jsonb, null, null)", [S.id]), /PERMISSION_DENIED/);
+    await expectError("slips cannot be changed directly", null, async (tx) => {
+      await tx.query("reset role");
+      await tx.query("update public.purchase_slips set net_payable = 1 where id = $1", [S.id]);
+    }, /slip actions/);
+    await as(users.accountant, (tx) => tx.query("select public.finalize_purchase_slip($1)", [S.id]));
+    await expectError("a final slip needs a reason to change", users.accountant,
+      (tx) => tx.query("select public.update_purchase_slip($1, '{\"early_payment\": true}'::jsonb, null, null)", [S.id]), /reason/);
+    await as(users.accountant, (tx) => tx.query("select public.update_purchase_slip($1, '{\"early_payment\": true}'::jsonb, null, 'Broker asked for early payment')", [S.id]));
+    S = await slipOf(users.accountant);
+    L = await linesOf(users.accountant, S.id);
+    check("early payment: cash discount 2.5% = 5987, revision 1", Number(L.cash_discount.rate) === 2.5 && amt("cash_discount") === 5987 && S.revision === 1 && S.status === "final",
+      JSON.stringify([L.cash_discount, S.revision]));
+    await as(users.accountant, (tx) => tx.query("select public.update_purchase_slip($1, '{\"bag_status\": \"received\"}'::jsonb, $2::jsonb, 'Bags kept')",
+      [S.id, JSON.stringify([{ label: "Sutli", basis: "flat", rate: 50 }])]));
+    S = await slipOf(users.accountant);
+    L = await linesOf(users.accountant, S.id);
+    check("bags received: dhalta 1.25% = 2993; an extra deduction can be added", Number(L.dhalta.rate) === 1.25 && amt("dhalta") === 2993 && amt("Sutli") === 50);
+    check("net payable follows the edits", Number(S.net_payable) === 239468 - (5987 + 2395 + 479 + 2993 + 771 + 950 + 1101 + 239 + 200 + 50), S.net_payable);
+    const audit = await one(db, "select count(*)::int as n from public.audit_log where table_name = 'purchase_slips' and record_id = $1 and reason = 'Broker asked for early payment'", [S.id]);
+    check("slip edits are in the audit log with the reason", audit.n >= 1);
+
+    // Parameters: changing them never changes an existing slip.
+    await as(users.admin, (tx) => tx.query("update public.calc_settings set value = 14 where key = 'slip_moisture_pass_pct'"));
+    await as(users.accountant, (tx) => tx.query("select public.update_purchase_slip($1, '{}'::jsonb, null, 'recalc check')", [S.id]));
+    L = await linesOf(users.accountant, S.id);
+    check("a later parameter change does not alter the slip (moisture stays 0.2%)", Number(L.moisture.rate) === 0.2);
+    await expectError("only the admin can change parameters (RLS)", users.accountant, async (tx) => {
+      const r = await tx.query("update public.purchase_deduction_types set value = 3 where code = 'cash_discount'");
+      if (r.affectedRows === 0) throw new Error("row-level: none");
+    }, /row-level/);
+    await as(users.admin, (tx) => tx.query("update public.calc_settings set value = 16 where key = 'slip_moisture_pass_pct'"));
+
+    // Payment and WhatsApp log.
+    const bank2 = await as(users.accountant, (tx) => one(tx, "insert into public.bank_accounts (name) values ('SBI Current') returning id"));
+    const payId = (await as(users.accountant, (tx) => one(tx, "select public.pay_purchase_slip($1, $2, 'RTGS', 'UTR139', current_date) as id", [S.id, bank2.id]))).id;
+    S = await slipOf(users.accountant);
+    const P = await one(db, "select * from public.payments where id = $1", [payId]);
+    check("paying the slip records a payment of the net payable to the party", S.status === "paid" && Number(P.amount) === Number(S.net_payable) && P.party_id === ann.id);
+    await as(users.accountant, (tx) => tx.query("select public.log_slip_send($1, 'whatsapp_manual', '919876543210', 'opened')", [S.id]));
+    check("WhatsApp sends are logged", (await one(db, "select count(*)::int as n from public.purchase_slip_sends where slip_id = $1", [S.id])).n === 1);
+    await expectError("a paid slip cannot be edited (payment would no longer match)", users.accountant,
+      (tx) => tx.query("select public.update_purchase_slip($1, '{}'::jsonb, null, 'x')", [S.id]), /Cancel its payment/);
+    await expectError("a paid slip cannot be cancelled", users.accountant, (tx) => tx.query("select public.cancel_purchase_slip($1, 'x')", [S.id]), /paid/);
+    await as(users.accountant, (tx) => tx.query("select public.cancel_payment($1, 'Wrong UTR')", [payId]));
+    S = await slipOf(users.accountant);
+    check("cancelling the payment re-opens the slip for payment", S.status === "final" && S.payment_id === null);
+    await expectError("broker phone must be a mobile number", users.accountant, (tx) => tx.query("select public.set_broker_contact($1, '12345', null)", [sachin.id]), /mobile/);
+    check("operators cannot see slips", (await as(users.foreman, (tx) => all(tx, "select * from public.purchase_slips"))).length === 0);
+    check("weighbridge operator (fills Khad) can see slips", (await as(users.weighbridge_operator, (tx) => all(tx, "select id from public.purchase_slips where id = $1", [S.id]))).length === 1);
+
+    const pub = await db.transaction(async (tx) => {
+      await tx.query("set local role anon");
+      return (await tx.query("select public.purchase_slip_by_token($1) as j", [S.share_token])).rows[0].j;
+    });
+    check("the broker's link shows the slip without signing in (no internal ids)", pub?.slip?.slip_no === S.slip_no && pub.lines.length >= 9 && !pub.slip.qc_id && pub.slip.share_token === "");
+    const bad = await db.transaction(async (tx) => { await tx.query("set local role anon"); return (await tx.query("select public.purchase_slip_by_token('abc') as j")).rows[0].j; });
+    check("a wrong token shows nothing", bad === null);
+    // Reversing the QC cancels the slip.
+    await as(users.accountant, (tx) => tx.query("select public.cancel_purchase_slip($1, 'test')", [S.id]));
+    const re = (await as(users.accountant, (tx) => one(tx, "select public.rebuild_purchase_slip($1) as id", [qid]))).id;
+    check("a cancelled slip can be rebuilt from the QC", !!re && re !== S.id);
+    await as(users.qc_head, (tx) => tx.query("select public.reverse_qc_inbound($1, 'Wrong party')", [qid]));
+    const rs = await one(db, "select status from public.purchase_slips where id = $1", [re]);
+    check("reversing the QC cancels its slip", rs.status === "cancelled", rs.status);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

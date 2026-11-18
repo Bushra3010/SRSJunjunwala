@@ -27,6 +27,7 @@ export async function captureTicket(fd: FormData) {
       plant_id: await getPlantId(),
       rst,
       vehicle_no: vehicle,
+      vehicle_type: optStr(fd, "vehicle_type"),
       direction,
       gross_kg: gross,
       tare_kg: tare,

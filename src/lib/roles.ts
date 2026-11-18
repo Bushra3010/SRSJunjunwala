@@ -47,6 +47,7 @@ export type NavKey =
   | "stores"
   | "reports"
   | "accounts"
+  | "purchase-slips"
   | "admin";
 
 /** Which roles may open each module (PRD §9). Enforced again by RLS in the database. */
@@ -61,6 +62,8 @@ export const NAV_ACCESS: Record<NavKey, Role[]> = {
   stores: ["admin", "management", "store_custodian"],
   reports: ["admin", "management", "qc_head", "commercial"],
   accounts: ["admin", "management", "accountant", "commercial"],
+  // Weighbridge operator and management can open slips to fill in Khad (set per deduction in Slip parameters).
+  "purchase-slips": ["admin", "management", "accountant", "commercial", "qc_head", "weighbridge_operator"],
   admin: ["admin", "management"],
 };
 
@@ -71,6 +74,8 @@ export function canAccess(role: Role | null | undefined, key: NavKey) {
 export const QC_REVIEWERS: Role[] = ["admin", "qc_head"];
 /** Who may record payments, fill rates and export to Tally. Mirrors can_edit_accounts() in the database. */
 export const ACCOUNT_EDITORS: Role[] = ["admin", "accountant"];
+/** Who may send slips to brokers on WhatsApp. Mirrors log_slip_send() in the database. */
+export const SLIP_SENDERS: Role[] = ["admin", "accountant", "management"];
 export const ORDER_EDITORS: Role[] = ["admin", "management", "commercial"];
 export const TICKET_CAPTURERS: Role[] = ["admin", "management", "weighbridge_operator"];
 export const TICKET_RESOLVERS: Role[] = ["admin", "management", "qc_head"];
