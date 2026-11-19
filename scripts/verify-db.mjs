@@ -31,6 +31,7 @@ const GRANTS = `
   revoke execute on function public.refresh_batch_status(uuid) from authenticated;
   revoke execute on function public.create_purchase_slip(uuid) from authenticated;
   revoke execute on function public.slip_recalc(uuid) from authenticated;
+  revoke execute on function public.admin_delete_log(text, uuid, text, jsonb, text) from authenticated;
 `;
 
 let passed = 0;
@@ -924,6 +925,80 @@ async function main() {
     await as(users.qc_head, (tx) => tx.query("select public.reverse_qc_inbound($1, 'Wrong party')", [qid]));
     const rs = await one(db, "select status from public.purchase_slips where id = $1", [re]);
     check("reversing the QC cancels its slip", rs.status === "cancelled", rs.status);
+  }
+
+  console.log("\nAdmin delete (past entries)");
+  {
+    const v = (await one(db, "select id from public.varieties where code = 'HYB'")).id;
+    const party2 = (await one(db, "select id from public.parties where name = 'Annapurna Trading Co'")).id;
+    const loc2 = (await one(db, "select id from public.locations where code = 'SFDJ'")).id;
+    const bank3 = (await one(db, "select id from public.bank_accounts where name = 'SBI Current'")).id;
+    const po = await as(users.commercial, async (tx) => {
+      const p = await one(tx, "insert into public.purchase_orders (plant_id, supplier_id) values ($1, $2) returning *", [PLANT, party2]);
+      return (await one(tx, "insert into public.po_lines (po_id, line_no, variety_id, ordered_kg, rate_per_qtl) values ($1, 1, $2, 50000, 2000) returning id", [p.id, v])).id;
+    });
+    const tk = await as(users.weighbridge_operator, (tx) =>
+      one(tx, `insert into public.weighbridge_tickets (plant_id, rst, vehicle_no, direction, gross_kg, tare_kg, weighed_at)
+               values ($1, 777, 'TEST 777', 'inbound', 20000, 8000, now() - interval '1 hour') returning *`, [PLANT]));
+    const qid = (await as(users.qc_unloading, (tx) => one(tx, "select public.start_qc_inbound($1) as id", [tk.id]))).id;
+    await as(users.qc_unloading, async (tx) => {
+      await tx.query("update public.qc_inbound set supplier_id = $2, location_id = $3, bag_status = 'received' where id = $1", [qid, party2, loc2]);
+      await tx.query("insert into public.qc_inbound_lines (qc_id, line_no, variety_id, po_line_id, moisture_pct, sacks_received) values ($1, 1, $2, $3, 15, 200)", [qid, v, po]);
+      await tx.query("select public.submit_qc_inbound($1)", [qid]);
+    });
+    await as(users.qc_head, (tx) => tx.query("select public.post_qc_inbound($1)", [qid]));
+    const slip = await one(db, "select * from public.purchase_slips where qc_id = $1", [qid]);
+    const khad = await one(db, "select id from public.purchase_slip_lines where slip_id = $1 and code = 'khad'", [slip.id]);
+    await as(users.accountant, async (tx) => {
+      await tx.query("select public.enter_slip_deduction($1, 0)", [khad.id]);
+      await tx.query("select public.finalize_purchase_slip($1)", [slip.id]);
+      await tx.query("select public.pay_purchase_slip($1, $2, 'RTGS', 'UTR777', current_date)", [slip.id, bank3]);
+    });
+    const pay = (await one(db, "select payment_id from public.purchase_slips where id = $1", [slip.id])).payment_id;
+
+    await expectError("only the admin can delete a truck", users.accountant,
+      (tx) => tx.query("select public.admin_delete_truck($1, 'test')", [tk.id]), /PERMISSION_DENIED/);
+    await expectError("deleting needs a reason", users.admin,
+      (tx) => tx.query("select public.admin_delete_truck($1, ' ')", [tk.id]), /reason/);
+
+    // Delete only the payment: the slip goes back to final.
+    await as(users.admin, (tx) => tx.query("select public.admin_delete_payment($1, 'test payment')", [pay]));
+    const s1 = await one(db, "select status, payment_id from public.purchase_slips where id = $1", [slip.id]);
+    check("admin deletes a payment; its slip goes back to final", s1.status === "final" && s1.payment_id === null &&
+      !(await one(db, "select id from public.payments where id = $1", [pay])));
+
+    // Delete the slip, then build it again.
+    await as(users.admin, (tx) => tx.query("select public.admin_delete_slip($1, 'wrong slip')", [slip.id]));
+    check("admin deletes a slip (and its lines)", !(await one(db, "select id from public.purchase_slips where id = $1", [slip.id])) &&
+      (await one(db, "select count(*)::int as n from public.purchase_slip_lines where slip_id = $1", [slip.id])).n === 0);
+    const again = (await as(users.accountant, (tx) => one(tx, "select public.rebuild_purchase_slip($1) as id", [qid]))).id;
+    check("a deleted slip can be built again from the QC", !!again);
+
+    // Delete the whole truck.
+    const stockBefore = (await one(db, "select count(*)::int as n from public.stock_movements where reference_id = $1", [qid])).n;
+    const res = (await as(users.admin, (tx) => one(tx, "select public.admin_delete_truck($1, 'test truck') as r", [tk.id]))).r;
+    const gone = await one(db, `select
+        (select count(*) from public.weighbridge_tickets where id = $1)::int as t,
+        (select count(*) from public.qc_inbound where id = $2)::int as q,
+        (select count(*) from public.qc_inbound_lines where qc_id = $2)::int as l,
+        (select count(*) from public.stock_movements where reference_id = $2)::int as m,
+        (select count(*) from public.purchase_slips where qc_id = $2)::int as s`, [tk.id, qid]);
+    check("admin deletes a truck with its QC, stock rows and slip", stockBefore > 0 && Object.values(gone).every((n) => n === 0) && res.rst === 777,
+      JSON.stringify({ gone, res }));
+    const log = await one(db, "select * from public.audit_log where action = 'admin_delete' and record_id = $1", [tk.id]);
+    check("a full copy of the deleted truck is kept in the audit log", !!log && log.old_data?.qc_inbound?.length === 1 && /test truck/.test(log.reason));
+
+    // Refusals.
+    const prodTicket = await one(db, `select q.ticket_id from public.production_batches b join public.qc_inbound_lines l on l.id = b.source_qc_line_id
+                                      join public.qc_inbound q on q.id = l.qc_id limit 1`);
+    await expectError("a truck that went into production cannot be deleted", users.admin,
+      (tx) => tx.query("select public.admin_delete_truck($1, 'x')", [prodTicket.ticket_id]), /production/);
+    const expTicket = await one(db, `select q.ticket_id from public.tally_exported x join public.qc_inbound q on x.voucher_key = 'PUR:' || q.id limit 1`);
+    await expectError("a truck already exported to Tally cannot be deleted", users.admin,
+      (tx) => tx.query("select public.admin_delete_truck($1, 'x')", [expTicket.ticket_id]), /Tally/);
+    let msg = "";
+    try { await db.query("delete from public.stock_movements where id = (select id from public.stock_movements limit 1)"); } catch (e) { msg = e.message; }
+    check("stock rows still cannot be deleted outside the admin delete", /append-only/.test(msg), msg);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

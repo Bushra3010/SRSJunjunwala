@@ -3,6 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ExternalLink, MessageCircle, Send } from "lucide-react";
 import { Card, Flash, Note, PageHeader } from "@/components/ui";
+import { AdminDelete } from "@/components/admin-delete";
+import { deleteSlip } from "@/lib/admin-delete-actions";
 import { PrintButton } from "@/components/print-button";
 import { SlipDocument } from "@/components/slip-document";
 import { requireModule } from "@/lib/auth";
@@ -250,6 +252,16 @@ export default async function SlipPage({ params, searchParams }: { params: Promi
                 <button className="btn-danger">Cancel slip</button>
               </form>
             </details>
+          )}
+          {profile.role === "admin" && (
+            <AdminDelete
+              action={deleteSlip}
+              id={id}
+              label={slip.slip_no}
+              what={`this slip${slip.payment_id ? " and its payment" : ""}. The QC and the truck stay, and the slip can be built again from Purchase slips`}
+              back="/purchase-slips"
+              here={`/purchase-slips/${id}`}
+            />
           )}
           {canEdit && slip.status === "cancelled" && (
             <form action={rebuildSlip} className="card space-y-2 p-4">

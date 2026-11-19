@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Card, Empty, Flash, Note, PageHeader } from "@/components/ui";
+import { AdminDelete } from "@/components/admin-delete";
+import { deletePayment } from "@/lib/admin-delete-actions";
 import { AccountsNav } from "@/components/accounts";
 import { requireModule } from "@/lib/auth";
 import { ACCOUNT_EDITORS } from "@/lib/roles";
@@ -184,6 +186,19 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
                                   <button className="btn-danger py-1 text-xs">Cancel</button>
                                 </form>
                               </details>
+                            )}
+                            {profile.role === "admin" && !inTally && (
+                              <div className="mt-1.5">
+                                <AdminDelete
+                                  compact
+                                  action={deletePayment}
+                                  id={p.id}
+                                  label={p.voucher_no}
+                                  what="this entry. A purchase slip it paid goes back to 'final'"
+                                  back="/accounts/payments"
+                                  here="/accounts/payments"
+                                />
+                              </div>
                             )}
                           </td>
                         )}

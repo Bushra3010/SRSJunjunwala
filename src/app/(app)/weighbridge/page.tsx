@@ -2,6 +2,8 @@ import Link from "next/link";
 import { Plus, Search, X } from "lucide-react";
 import { requireModule, hasRole } from "@/lib/auth";
 import { TICKET_CAPTURERS, TICKET_RESOLVERS } from "@/lib/roles";
+import { AdminDelete } from "@/components/admin-delete";
+import { deleteTruck } from "@/lib/admin-delete-actions";
 import { Badge, Card, Empty, Field, Flash, Note, PageHeader, StatusBadge, Tabs } from "@/components/ui";
 import { date, dateTime, kg, num, startOfTodayIST } from "@/lib/format";
 import type { Ticket } from "@/lib/types";
@@ -340,6 +342,17 @@ async function TicketDetail({ id, closeHref }: { id: string; closeHref: string }
           <div className="text-sm">
             <span className="text-slate-500">Resolution:</span> {t.resolution_note} ({dateTime(t.resolved_at)})
           </div>
+        )}
+
+        {hasRole(profile, ["admin"]) && (
+          <AdminDelete
+            action={deleteTruck}
+            id={t.id}
+            label={`RST ${t.rst}`}
+            what="this truck entry with its QC, stock entries, purchase slip and slip payment"
+            back="/weighbridge"
+            here={`/weighbridge?id=${t.id}`}
+          />
         )}
 
         {!!audit?.length && (
